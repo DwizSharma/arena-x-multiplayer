@@ -1,0 +1,1 @@
+{"name":"arena-x-simulation","private":true,"type":"module","dependencies":{"@stomp/stompjs":"^7.0.0","ws":"^8.18.0"}}

@@ -14,5 +14,5 @@ public final class GameTypes {
     public record Snapshot(String roomCode, Phase phase, int questionIndex, long remainingMs,
                            List<Option> options, boolean submitted, int score, int rank, List<PlayerView> players) {}
     public record Answer(String questionId, String optionId, Long clientTimestamp) {}
-    public record SubmissionResult(String status, int score) {}
+    public record SubmissionResult(String status, int score, long serverElapsedMs) {}
 }

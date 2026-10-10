@@ -42,23 +42,23 @@ public class RoomEngine {
         Room room = requireRoom(code); long received = System.currentTimeMillis();
         synchronized (room) {
             Player player = room.players.get(playerId);
-            if (player == null) { sendPlayer(playerId, "answer-result", new SubmissionResult("UNKNOWN_PLAYER", 0)); return; }
+            if (player == null) { sendPlayer(playerId, "answer-result", new SubmissionResult("UNKNOWN_PLAYER", 0, 0)); return; }
             if (room.phase != Phase.QUESTION_ACTIVE || answer == null || !room.current().id().equals(answer.questionId())) {
-                sendPlayer(playerId, "answer-result", new SubmissionResult("NOT_ACTIVE", 0)); return;
+                sendPlayer(playerId, "answer-result", new SubmissionResult("NOT_ACTIVE", 0, 0)); return;
             }
             if (received > room.endsAt + JITTER_MS) {
-                sendPlayer(playerId, "answer-result", new SubmissionResult("LATE_SUBMISSION", 0)); return;
+                sendPlayer(playerId, "answer-result", new SubmissionResult("LATE_SUBMISSION", 0, received-room.serverStart)); return;
             }
             Submission submission = new Submission(answer.optionId(), received);
             if (player.submissions.putIfAbsent(room.questionIndex, submission) != null) {
-                sendPlayer(playerId, "answer-result", new SubmissionResult("DUPLICATE", 0)); return;
+                sendPlayer(playerId, "answer-result", new SubmissionResult("DUPLICATE", 0, received-room.serverStart)); return;
             }
             long elapsed = Math.max(0, received - room.serverStart);
             boolean correct = room.current().correctOptionId().equals(player.optionMapping.get(answer.optionId()));
             int score = correct ? 500 + (int)Math.floor(500 * (1.0 - Math.min(1.0, (double)elapsed / room.allowedMs))): 0;
             player.score += score; player.answersCorrect += correct ? 1 : 0; player.responseTimes.add(elapsed);
             room.distribution.merge(player.optionMapping.get(answer.optionId()), 1, Integer::sum);
-            sendPlayer(playerId, "answer-result", new SubmissionResult("ACCEPTED", score));
+            sendPlayer(playerId, "answer-result", new SubmissionResult("ACCEPTED", score, elapsed));
             messaging.convertAndSend(topic(room, "progress"), Map.of("submitted", countSubmitted(room), "total", room.players.size()));
             if (countSubmitted(room) == room.players.size()) reveal(room);
         }
