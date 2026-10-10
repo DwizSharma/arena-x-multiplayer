@@ -39,7 +39,7 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
           callbacks.current[key]?.unsubscribe();
           callbacks.current[key] = client.subscribe(destination, (message: IMessage) => {
             const value = JSON.parse(message.body);
-            setState(s => ({ ...s, [field]: value, ...(field === 'snapshot' ? { phase: value.phase } : {}), ...(field === 'roster' ? {} : {}) }));
+            setState(s => ({ ...s, [field]: value, ...(field === 'snapshot' ? { phase: value.phase, question: value.currentQuestion || null } : {}), ...(field === 'roster' ? {} : {}) }));
           });
         };
         subscribe('state', `/topic/room/${room}/state`, 'snapshot');

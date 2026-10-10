@@ -1,6 +1,7 @@
 package com.arenax.game;
 
 import com.arenax.game.GameTypes.*;
+import com.arenax.domain.*;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 import jakarta.annotation.PreDestroy;
@@ -16,7 +17,11 @@ public class RoomEngine {
         Thread t = new Thread(r, "arena-room-clock"); t.setDaemon(true); return t;
     });
     private final SimpMessagingTemplate messaging;
-    public RoomEngine(SimpMessagingTemplate messaging) { this.messaging = messaging; }
+    private final CollegeRepository colleges;
+    private final MatchHistoryRepository matches;
+    public RoomEngine(SimpMessagingTemplate messaging, CollegeRepository colleges, MatchHistoryRepository matches) {
+        this.messaging = messaging; this.colleges = colleges; this.matches = matches;
+    }
     @PreDestroy public void close() { clock.shutdownNow(); }
 
     public synchronized PlayerView join(String code, SessionRegistry.Identity identity) {
@@ -53,6 +58,9 @@ public class RoomEngine {
             if (received > room.endsAt + JITTER_MS) {
                 sendPlayer(playerId, "answer-result", new SubmissionResult("LATE_SUBMISSION", 0, received-room.serverStart)); return;
             }
+            if (!player.optionMapping.containsKey(answer.optionId())) {
+                sendPlayer(playerId, "answer-result", new SubmissionResult("INVALID_OPTION", 0, received-room.serverStart)); return;
+            }
             Submission submission = new Submission(answer.optionId(), received);
             if (player.submissions.putIfAbsent(room.questionIndex, submission) != null) {
                 sendPlayer(playerId, "answer-result", new SubmissionResult("DUPLICATE", 0, received-room.serverStart)); return;
@@ -61,6 +69,8 @@ public class RoomEngine {
             boolean correct = room.current().correctOptionId().equals(player.optionMapping.get(answer.optionId()));
             int score = correct ? 500 + (int)Math.floor(500 * (1.0 - Math.min(1.0, (double)elapsed / room.allowedMs))): 0;
             player.score += score; player.answersCorrect += correct ? 1 : 0; player.responseTimes.add(elapsed);
+            String topic = room.current().topic() == null ? "Other" : room.current().topic();
+            player.topics.computeIfAbsent(topic, ignored -> new TopicCounter()).add(correct, elapsed);
             room.distribution.merge(player.optionMapping.get(answer.optionId()), 1, Integer::sum);
             sendPlayer(playerId, "answer-result", new SubmissionResult("ACCEPTED", score, elapsed));
             messaging.convertAndSend(topic(room, "progress"), Map.of("submitted", countSubmitted(room), "total", room.players.size()));
@@ -75,8 +85,12 @@ public class RoomEngine {
             List<Option> options = room.phase == Phase.QUESTION_ACTIVE || room.phase == Phase.QUESTION_INTRO ?
                     shuffled(room.current(), player).stream().map(o -> new Option(o.id(), o.text())).toList() : List.of();
             long end = room.phase == Phase.QUESTION_ACTIVE ? room.endsAt : room.transitionAt;
+            PublicQuestion currentQuestion = room.phase == Phase.QUESTION_ACTIVE ? new PublicQuestion(room.questionIndex,
+                    room.current().id(), room.current().prompt(), options, room.current().topic(), room.serverStart,
+                    room.endsAt, room.allowedMs, Math.max(0, room.endsAt-System.currentTimeMillis()),
+                    room.current().imageUrl(), room.current().tableData()) : null;
             return new Snapshot(room.code, room.phase, room.questionIndex,
-                    end == 0 ? 0 : Math.max(0, end - System.currentTimeMillis()), options,
+                    end == 0 ? 0 : Math.max(0, end - System.currentTimeMillis()), options, currentQuestion,
                     player.submissions.containsKey(room.questionIndex), player.score, rank(room, player), standings(room));
         }
     }
@@ -90,14 +104,15 @@ public class RoomEngine {
         room.endsAt = room.serverStart + room.allowedMs; room.transitionAt = room.endsAt;
         room.distribution.clear(); broadcastState(room);
         PublicQuestion publicQuestion = new PublicQuestion(room.questionIndex, room.current().id(), room.current().prompt(),
-                room.current().options(), room.current().topic(), room.serverStart, room.endsAt,
+                room.current().options(), room.current().topic(), room.serverStart, room.endsAt, room.allowedMs, room.allowedMs,
                 room.current().imageUrl(), room.current().tableData());
         messaging.convertAndSend(topic(room, "question"), publicQuestion);
         for (Player player : room.players.values()) {
             List<Option> shuffle = shuffled(room.current(), player);
             player.optionMapping.clear(); shuffle.forEach(o -> player.optionMapping.put(o.id(), o.id()));
             sendPlayer(player.identity.playerId(), "question", new PublicQuestion(room.questionIndex, room.current().id(), room.current().prompt(),
-                    shuffle, room.current().topic(), room.serverStart, room.endsAt, room.current().imageUrl(), room.current().tableData()));
+                    shuffle, room.current().topic(), room.serverStart, room.endsAt, room.allowedMs, room.allowedMs,
+                    room.current().imageUrl(), room.current().tableData()));
         }
         room.task = clock.schedule(() -> { synchronized (room) { if (room.phase == Phase.QUESTION_ACTIVE) reveal(room); } }, room.allowedMs + JITTER_MS, TimeUnit.MILLISECONDS);
     }
@@ -120,16 +135,29 @@ public class RoomEngine {
         room.task = clock.schedule(() -> { synchronized (room) {
             if (room.phase != Phase.ROUND_LEADERBOARD) return;
             if (++room.questionIndex >= room.prompts.size()) {
-                room.phase = Phase.FINAL_PODIUM; room.transitionAt = 0; messaging.convertAndSend(topic(room, "results"), standings(room)); broadcastState(room);
+                room.phase = Phase.FINAL_PODIUM; room.transitionAt = 0; persistMatch(room);
+                messaging.convertAndSend(topic(room, "results"), standings(room)); broadcastState(room);
             } else intro(room);
         } }, BOARD_MS, TimeUnit.MILLISECONDS);
     }
     private void broadcastState(Room room) { messaging.convertAndSend(topic(room, "state"), Map.of("phase", room.phase, "questionIndex", room.questionIndex, "remainingMs", Math.max(0, room.transitionAt-System.currentTimeMillis()))); }
     private void publishRoster(Room room) { messaging.convertAndSend(topic(room, "roster"), standings(room)); }
-    private List<PlayerView> standings(Room room) { List<Player> sorted = new ArrayList<>(room.players.values()); sorted.sort(Comparator.comparingInt((Player p)->p.score).reversed().thenComparing(p->p.identity.name())); List<PlayerView> views=new ArrayList<>(); for(int i=0;i<sorted.size();i++) views.add(new PlayerView(sorted.get(i).identity.playerId(),sorted.get(i).identity.name(),sorted.get(i).identity.college(),sorted.get(i).score,i+1,sorted.get(i).submissions.containsKey(room.questionIndex))); return views; }
+    private List<PlayerView> standings(Room room) { List<Player> sorted = new ArrayList<>(room.players.values()); sorted.sort(Comparator.comparingInt((Player p)->p.score).reversed().thenComparing(p->p.identity.name())); List<PlayerView> views=new ArrayList<>(); for(int i=0;i<sorted.size();i++) { Player p=sorted.get(i); int answered=p.responseTimes.size(); long avg=answered==0?0:p.responseTimes.stream().mapToLong(Long::longValue).sum()/answered; Map<String,TopicAnalytics> topics=new TreeMap<>(); p.topics.forEach((name,counter)->topics.put(name,counter.view())); views.add(new PlayerView(p.identity.playerId(),p.identity.name(),p.identity.college(),p.score,i+1,p.submissions.containsKey(room.questionIndex),answered==0?0:p.answersCorrect*100/answered,avg,topics)); } return views; }
     private PlayerView view(Room room, Player player) { return standings(room).stream().filter(v->v.playerId().equals(player.identity.playerId())).findFirst().orElseThrow(); }
     private int rank(Room room, Player player) { return view(room, player).rank(); }
     private int countSubmitted(Room room) { return (int)room.players.values().stream().filter(p->p.submissions.containsKey(room.questionIndex)).count(); }
+    private void persistMatch(Room room) {
+        List<Player> sorted = new ArrayList<>(room.players.values());
+        sorted.sort(Comparator.comparingInt((Player p)->p.score).reversed().thenComparing(p->p.identity.name()));
+        String winner = sorted.isEmpty() ? null : sorted.get(0).identity.playerId();
+        Map<String,Long> pointsByCollege = new HashMap<>();
+        room.players.values().forEach(p -> pointsByCollege.merge(p.identity.college(), (long)p.score, Long::sum));
+        pointsByCollege.forEach((name, points) -> {
+            College college = colleges.findByName(name).orElseGet(() -> new College(name, null));
+            college.addPoints(points); College saved = colleges.save(college);
+            matches.save(new MatchHistory(room.code, saved, winner));
+        });
+    }
     private String topic(Room room, String event) { return "/topic/room/"+room.code+"/"+event; }
     private void sendPlayer(String playerId, String queue, Object payload) { messaging.convertAndSendToUser(playerId, "/queue/"+queue, payload); }
     private Room requireRoom(String code) { Room room=rooms.get(code.toUpperCase(Locale.ROOT)); if(room==null) throw new IllegalArgumentException("Unknown room"); return room; }
@@ -148,7 +176,13 @@ public class RoomEngine {
     private static final class Player {
         final SessionRegistry.Identity identity; int score, answersCorrect; final List<Long> responseTimes=new ArrayList<>();
         final Map<Integer,Submission> submissions=new ConcurrentHashMap<>(); final Map<String,String> optionMapping=new ConcurrentHashMap<>();
+        final Map<String,TopicCounter> topics=new ConcurrentHashMap<>();
         Player(SessionRegistry.Identity identity) { this.identity=identity; }
     }
     private record Submission(String optionId,long receivedAt) {}
+    private static final class TopicCounter {
+        int answered, correct; long totalSpeed;
+        synchronized void add(boolean isCorrect, long speed) { answered++; if(isCorrect) correct++; totalSpeed += speed; }
+        synchronized TopicAnalytics view() { return new TopicAnalytics(answered,correct,answered==0?0.0:(double)correct*100/answered,answered==0?0:totalSpeed/answered); }
+    }
 }

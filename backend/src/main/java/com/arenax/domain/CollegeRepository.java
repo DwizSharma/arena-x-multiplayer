@@ -1,3 +1,4 @@
 package com.arenax.domain;
 import org.springframework.data.jpa.repository.JpaRepository;
-public interface CollegeRepository extends JpaRepository<College, String> {}
+import java.util.Optional;
+public interface CollegeRepository extends JpaRepository<College, String> { Optional<College> findByName(String name); }

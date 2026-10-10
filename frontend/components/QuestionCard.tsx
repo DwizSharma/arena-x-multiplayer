@@ -1,12 +1,14 @@
 'use client';
 import ReactMarkdown from 'react-markdown';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export function QuestionCard({ question, onAnswer, locked }: { question: any; onAnswer: (questionId: string, optionId: string) => void; locked: boolean }) {
   const [now, setNow] = useState(Date.now());
+  const receivedAt = useRef(performance.now());
+  useEffect(() => { receivedAt.current = performance.now(); }, [question?.promptId]);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 100); return () => clearInterval(timer); }, []);
   if (!question) return null;
-  const total = Math.max(1, question.endsAt - question.serverStart); const left = Math.max(0, question.endsAt - now); const pct = Math.max(0, Math.min(100, left / total * 100));
+  const total = Math.max(1, question.durationMs || 1); const left = Math.max(0, (question.remainingMs ?? total) - (performance.now() - receivedAt.current)); const pct = Math.max(0, Math.min(100, left / total * 100));
   return <section className="panel question-card" aria-live="polite">
     <div className="timer-track" aria-label={`${Math.ceil(left / 1000)} seconds remaining`}><div style={{ width: `${pct}%` }} /></div>
     <div className="question-meta"><span>QUESTION {question.index + 1}</span><span>{Math.ceil(left / 1000)}s</span></div>

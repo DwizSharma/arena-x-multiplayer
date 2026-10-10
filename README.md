@@ -89,7 +89,7 @@ The script creates 50 sessions, connects concurrent STOMP clients, joins them as
 
 ## Current deployment scope
 
-This initial implementation stores active rooms, issued sessions, option maps, and match scores in backend memory. PostgreSQL entities/schema generation and Redis connectivity are provisioned, but the demonstration engine currently runs its bundled three-question set and does not yet load or persist matches through the repositories. Restarting the backend clears active rooms and tokens. The UI is ready to render standings and topic labels; per-topic accuracy/speed analytics require persisted player answer history. Deployments that need durable competitive matches should add those repository writes and shared room/session state before running multiple backend replicas.
+The engine runs a bundled three-question demonstration set. Active rooms, issued sessions, option maps, and detailed player answer analytics stay in backend memory; completed match summaries and college points are written to PostgreSQL. Question set and question entities are defined, but the demo engine does not yet load custom question sets. Restarting the backend clears active rooms and player tokens, and the detailed per-player analytics are not durable. Redis is provisioned for future shared room/session state; this version uses an in-process scheduler and room map, so run a single backend replica.
 
 ## Public GitHub remote
 
