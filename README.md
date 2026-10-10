@@ -1,132 +1,78 @@
 # ArenaX Multiplayer
 
-ArenaX is a live, server-authoritative quiz arena built with Java 21, Spring Boot, STOMP over WebSocket, PostgreSQL, Redis, and Next.js. The repository includes a working demonstration match, browser UI, projector route, Docker deployment, and 50-client simulation harness.
+## What it does
+ArenaX is a live, server-authoritative quiz arena. Players join a room from their phones, answer timed multiple-choice questions, and see a live leaderboard, while a projector view shows standings and answer distribution on a big screen. Problem statement: **YOUR_PROBLEM_STATEMENT_NUMBER**. Statement number: **YOUR_STATEMENT_NUMBER**.
 
-## Architecture
+## Done / Left / Plan
+**Done**
+- Join flow (name + college), lobby, timed questions, reveal, round leaderboard, final podium
+- Server-side clock, first-answer-wins scoring, reconnect snapshots
+- Projector view and custom question sets stored in PostgreSQL
+- Match summaries and college points saved to PostgreSQL
+- 50-player WebSocket simulation script
 
-```text
- Player browser                         ArenaX backend
- ┌─────────────────┐     POST /api/session      ┌──────────────────────┐
- │ Join form        │ ─────────────────────────> │ SessionRegistry      │
- │                 │ <── playerId + token ────── │                      │
- │ STOMP client     │ ═══ /ws-arena?token ═════> │ Handshake validation │
- │                 │ ─── /app/room/{code}/join > │ RoomEngine (memory)  │
- │ Question + timer │ <── /user/queue/question ─ │ server clock + FSM   │
- │                 │ ─── /app/room/{code}/answer>│ first answer wins    │
- │ Leaderboard      │ <── /topic/room/{code}/... │ score + standings    │
- └─────────────────┘                            └──────────┬───────────┘
-                                                         │ JPA schema
-                                                   ┌─────┴─────┐
-                                                   │ Postgres  │  Redis
-                                                   └───────────┘
-```
+**Left**
+- Restore active rooms after a backend restart (rooms and sessions are in memory today)
+- Support more than one backend replica (in-process scheduler and room map)
+- Persist detailed per-player answer analytics
 
-The simple broker broadcasts room state, roster, questions, reveals, and standings. Personalized shuffled questions and answer acknowledgements use user queues. The projector subscribes to public room topics.
+**Plan**
+- Use Redis snapshots to rebuild rooms on startup
+- Move room state and scheduling out of process so the backend can scale horizontally
+- Write answer analytics to PostgreSQL at the end of each match
 
-## Server clock, scoring, and answer integrity
+## Architecture and why
+- **Backend:** Java 21 + Spring Boot. STOMP over WebSocket gives low-latency two-way messaging; the simple broker broadcasts room state, roster, reveals and standings, and user queues carry each player's shuffled question and answer acknowledgement.
+- **Server-authoritative game engine:** the server owns the clock and ignores client timestamps. Answers arrive via an atomic `putIfAbsent`, so only the first answer per player per question counts. A 250 ms grace period absorbs network delay without extending the scored window. This keeps scoring fair.
+- **Per-player option shuffle:** each player sees options in a deterministic player-specific order, mapped back to canonical IDs on the server. Public messages never contain the correct answer.
+- **Session tokens:** `POST /api/session` issues a token that is validated at WebSocket handshake and bound to the connection.
+- **PostgreSQL:** question sets, colleges, match history and college points (durable data).
+- **Redis:** expiring JSON snapshots of room state; the in-memory room stays authoritative.
+- **Frontend:** Next.js (App Router) + Tailwind, with a STOMP client hook that reconnects and requests a snapshot.
+- **Room flow:** `LOBBY -> QUESTION_INTRO -> QUESTION_ACTIVE -> QUESTION_REVEAL -> ROUND_LEADERBOARD -> podium`. The question ends early if every player has answered.
 
-The server records the start instant and receives each answer itself. It ignores client timestamps, calculates elapsed time from its own clock, and rejects an answer received after the question deadline plus a 250 ms network grace period. The grace period absorbs small network scheduling delays; it does not extend the scored time window. The speed bonus is capped at zero after the allowed time, and wrong answers score zero.
+## What we added
+- Projector route (`/projector/[code]`) for auditorium display
+- Reconnect snapshots (remaining time, shuffled options, score, rank)
+- Custom question sets via `POST /api/question-sets`
+- 50-player load simulation (`simulation/`)
+- Docker Compose deployment with health checks
 
-The engine accepts only the first answer for each player and question using an atomic `putIfAbsent`. Later packets are rejected as duplicates. Public question messages omit the correct option. Each player receives the same options in a deterministic player-specific shuffle; the answer is mapped back to its canonical option ID on the server. The server validates that the player's session token was issued by ArenaX and binds that identity to the WebSocket session.
-
-Rooms progress through `LOBBY → QUESTION_INTRO (3 s) → QUESTION_ACTIVE (20–45 s) → QUESTION_REVEAL (5 s) → ROUND_LEADERBOARD (5 s)`. If every joined player submits during the active phase, the engine cancels the pending timeout and reveals immediately. After the final question it broadcasts the podium state. Reconnecting clients request a snapshot with remaining time, their shuffled options, submission status, score, and rank.
-
-## Start with Docker
-
-Install Docker with the Compose plugin, then run from the repository root:
+## How to run it
+Requires Docker with the Compose plugin. No login is needed: open the app, enter a name and college, and join room `APT892`.
 
 ```bash
+cp .env.example .env        # then set DATABASE_PASSWORD
 docker compose up --build
 ```
 
-Open [http://localhost:3000](http://localhost:3000), join room `APT892`, then press **Start match** from a connected player. PostgreSQL is available on port 5432 (`arena` / `arena` / `arena_db`) and Redis on port 6379. Set `DATABASE_PASSWORD` before startup to override the development database password. The compose health checks wait for PostgreSQL and Redis before starting the backend, and for the backend before starting Next.js.
+Open http://localhost:3000, join room `APT892`, and press **Start match** from a connected player.
 
-## Run services locally
-
-Start only the data services:
+Run services locally instead (Java 21, Maven, Node 20+):
 
 ```bash
 docker compose up -d postgres redis
+set -a; source .env; set +a
+cd backend && mvn spring-boot:run          # terminal 1
+cd frontend && npm install && npm run dev  # terminal 2
 ```
 
-In a terminal, run Spring Boot (Java 21 and Maven required):
+50-player simulation (backend running, room not yet started):
 
 ```bash
-cd backend
-mvn spring-boot:run
+cd simulation && npm install && node simulate_50_players.js
 ```
 
-In another terminal, run the Next.js app (Node 20+ required):
+Custom question set: `POST /api/question-sets` with a title, host ID and questions (each needs at least two options and a matching `correctOptionId`). Start a match with `{"questionSetId":"<id>"}` sent to `/app/room/{code}/start`.
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+Live URL: TODO (add once deployed)
 
-Visit [http://localhost:3000](http://localhost:3000). By default, the browser calls the backend at `http://localhost:8080` and connects to `ws://localhost:8080/ws-arena`. Override these with `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_WS_URL` when running behind a proxy or on another host.
+## Tools and AI used
+- Java 21, Spring Boot, Spring Data JPA, STOMP/WebSocket, PostgreSQL 16, Redis 7
+- Next.js, React, Tailwind CSS, framer-motion, @stomp/stompjs
+- Docker / Docker Compose
+- AI coding tools: TODO (name the tools you used, if any)
+- The app has no AI features, and players do not talk to an AI. All questions and scoring are deterministic.
 
-## 50-player load simulation
-
-Start the backend and make sure room `APT892` has not already been started. Then run:
-
-```bash
-cd simulation
-npm install
-node simulate_50_players.js
-```
-
-The script creates 50 sessions, connects concurrent STOMP clients, joins them as `Student_1` through `Student_50`, starts the match, and chooses randomized answers after 1.2–7.5 seconds. It prints accepted/rejected counts and server-measured answer elapsed times. Configure `API_URL`, `WS_URL`, and `ROOM_CODE` to target another local deployment or room.
-
-## Routes and packages
-
-- `/play/[code]` — join form, lobby, question flow, reveal, and live standings.
-- `/play/[code]/results` — final podium view.
-- `/projector/[code]` — auditorium standings and answer distribution.
-- `backend/` — Spring Boot service and JPA entities for colleges, question sets, questions, and match history.
-- `frontend/` — Next.js App Router client, STOMP reconnect hook, and responsive views.
-- `simulation/` — 50-player WebSocket simulation.
-
-## Current deployment scope
-
-The engine runs either a bundled three-question set or a question set loaded from PostgreSQL. Completed match summaries and college points are written to PostgreSQL. Active rooms, issued sessions, option maps, and detailed player answer analytics stay in backend memory; Redis holds expiring JSON snapshots but is not used to restore rooms after restart. Player tokens and active matches are therefore cleared by a backend restart. This version uses an in-process scheduler and room map, so run a single backend replica.
-
-### Custom question sets
-
-Create a question set through `POST /api/question-sets`; questions need at least two options, and `correctOptionId` must match one option ID. The response contains the generated ID. Fetch its persisted definition with `GET /api/question-sets/{id}`; that response deliberately omits correct answers. To play it, send `{ "questionSetId": "<id>" }` as the body of STOMP `/app/room/{code}/start`; omitting the ID starts the bundled demo set. Custom prompts, options, image URLs, and table data are loaded from PostgreSQL for the match. Redis stores expiring JSON snapshots for room state, roster, and the current scrubbed question; the in-memory room remains authoritative.
-
-Example request:
-
-```json
-{
-  "title": "Quant warmup",
-  "hostId": "instructor-1",
-  "questions": [{
-    "prompt": "What is 6 × 7?",
-    "options": [{"id":"A","text":"36"},{"id":"B","text":"42"}],
-    "correctOptionId": "B",
-    "topic": "Quant",
-    "difficulty": "easy"
-  }]
-}
-```
-
-After the create request returns an ID, enter it in the optional question set field in the room lobby and select **Start match**, or publish the STOMP start message to `/app/room/APT892/start` with body `{"questionSetId":"<id>"}`.
-
-## Public GitHub remote
-
-The local repository is on branch `main`. GitHub CLI authentication could not be completed in this environment because its saved token is invalid. Authenticate, then create and push the requested **public** repository:
-
-```bash
-gh auth login -h github.com
-gh repo create arena-x-multiplayer --source=. --remote=origin --push --public
-```
-
-If creating the public repository in the GitHub website instead, add its URL and push:
-
-```bash
-git remote add origin <USER_GITHUB_REPO_URL>
-git push -u origin main
-```
-
-Push subsequent milestone commits with `git push`.
+## Who it is for
+College quiz hosts and participants running live events, from classrooms to auditorium contests. Players come back for the college leaderboard and points across matches, and hosts for fast set-up with custom question sets.
