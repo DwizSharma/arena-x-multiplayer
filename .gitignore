@@ -23,3 +23,13 @@ target/
 next-env.d.ts
 .idea/
 .vscode/
+
+# Added
+.env
+node_modules/
+.next/
+target/
+*.tsbuildinfo
+next-env.d.ts
+.idea/
+.vscode/
