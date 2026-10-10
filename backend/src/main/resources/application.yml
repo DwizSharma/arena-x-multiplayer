@@ -2,7 +2,7 @@ spring:
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/arena_db}
     username: ${DATABASE_USER:arena}
-    password: ${DATABASE_PASSWORD:arena}
+    password: ${DATABASE_PASSWORD}
   jpa:
     hibernate:
       ddl-auto: update
