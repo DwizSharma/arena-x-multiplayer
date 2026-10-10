@@ -15,7 +15,7 @@ export function QuestionCard({ question, onAnswer, locked }: { question: any; on
     <div className="prompt"><ReactMarkdown>{question.prompt}</ReactMarkdown></div>
     {question.imageUrl && <img className="question-image" src={question.imageUrl} alt="Question illustration" />}
     {question.tableData?.length > 0 && <div className="table-wrap"><table><tbody>{question.tableData.map((row: string[], i: number) => <tr key={i}>{row.map((cell, j) => <td key={j}>{cell}</td>)}</tr>)}</tbody></table></div>}
-    <div className="options">{question.options.map((option: { id: string; text: string }, i: number) => <button key={option.id} disabled={locked || left <= 0} onClick={() => onAnswer(question.promptId, option.id)} className={`option option-${i}`}><span className="option-letter">{String.fromCharCode(65 + i)}</span>{option.text}</button>)}</div>
+    <div className="options">{question.options.map((option: { id: string; text: string }, i: number) => <button key={option.id} disabled={locked || left <= 0} onClick={() => onAnswer(question.promptId, option.id)} className={`option option-${i}`}><span className="option-letter">{option.id}</span>{option.text}</button>)}</div>
     {locked && <p className="locked">Answer locked in ✓</p>}
   </section>;
 }

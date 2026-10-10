@@ -111,7 +111,7 @@ Example request:
 }
 ```
 
-After the create request returns an ID, connect an authenticated player to the room and publish the STOMP start message to `/app/room/APT892/start` with body `{"questionSetId":"<id>"}`.
+After the create request returns an ID, enter it in the optional question set field in the room lobby and select **Start match**, or publish the STOMP start message to `/app/room/APT892/start` with body `{"questionSetId":"<id>"}`.
 
 ## Public GitHub remote
 

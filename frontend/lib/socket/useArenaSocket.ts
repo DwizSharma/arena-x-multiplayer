@@ -40,7 +40,9 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
           callbacks.current[key]?.unsubscribe();
           callbacks.current[key] = client.subscribe(destination, (message: IMessage) => {
             const value = JSON.parse(message.body);
-            setState(s => ({ ...s, [field]: value, ...(field === 'snapshot' ? { phase: value.phase, question: value.currentQuestion || null } : {}), ...(field === 'roster' ? {} : {}) }));
+            setState(s => ({ ...s, [field]: value,
+              ...(field === 'snapshot' ? { phase: value.phase, question: value.currentQuestion || null,
+                ...(value.phase === 'QUESTION_ACTIVE' ? { reveal: null, progress: null } : {}) } : {}) }));
           });
         };
         subscribe('state', `/topic/room/${room}/state`, 'snapshot');
@@ -70,6 +72,6 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
     void boot();
     return () => { cancelled = true; Object.values(callbacks.current).forEach(sub => sub.unsubscribe()); callbacks.current = {}; if (activeClient) void activeClient.deactivate(); if (clientRef.current === activeClient) clientRef.current = null; };
   }, [room, readCredentials, publish, anonymousView]);
-  const actions = useMemo(() => ({ start: () => publish(`/app/room/${room}/start`), answer: (questionId: string, optionId: string) => publish(`/app/room/${room}/answer`, { questionId, optionId }) }), [publish, room]);
+  const actions = useMemo(() => ({ start: (questionSetId?: string) => publish(`/app/room/${room}/start`, questionSetId ? { questionSetId } : {}), answer: (questionId: string, optionId: string) => publish(`/app/room/${room}/answer`, { questionId, optionId }) }), [publish, room]);
   return { ...state, ...actions };
 }

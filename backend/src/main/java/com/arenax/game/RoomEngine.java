@@ -88,8 +88,7 @@ public class RoomEngine {
         synchronized (room) {
             Player player = room.players.get(playerId);
             if (player == null) throw new IllegalArgumentException("Player is not in room");
-            List<Option> options = room.phase == Phase.QUESTION_ACTIVE || room.phase == Phase.QUESTION_INTRO ?
-                    shuffled(room.current(), player).stream().map(o -> new Option(o.id(), o.text())).toList() : List.of();
+            List<Option> options = room.phase == Phase.QUESTION_ACTIVE || room.phase == Phase.QUESTION_INTRO ? player.displayOptions : List.of();
             long end = room.phase == Phase.QUESTION_ACTIVE ? room.endsAt : room.transitionAt;
             PublicQuestion currentQuestion = room.phase == Phase.QUESTION_ACTIVE ? new PublicQuestion(room.questionIndex,
                     room.current().id(), room.current().prompt(), options, room.current().topic(), room.serverStart,
@@ -102,6 +101,7 @@ public class RoomEngine {
     }
     private void intro(Room room) {
         room.phase = Phase.QUESTION_INTRO; room.transitionAt = System.currentTimeMillis() + INTRO_MS;
+        for (Player player : room.players.values()) permuteForPlayer(room.current(), player);
         broadcastState(room); room.task = clock.schedule(() -> { synchronized (room) { if (room.phase == Phase.QUESTION_INTRO) activate(room); } }, INTRO_MS, TimeUnit.MILLISECONDS);
     }
     private void activate(Room room) {
@@ -116,8 +116,7 @@ public class RoomEngine {
         messaging.convertAndSend(topic(room, "question"), publicQuestion);
         cache.put("room:" + room.code + ":question", publicQuestion);
         for (Player player : room.players.values()) {
-            List<Option> shuffle = shuffled(room.current(), player);
-            player.optionMapping.clear(); shuffle.forEach(o -> player.optionMapping.put(o.id(), o.id()));
+            List<Option> shuffle = permuteForPlayer(room.current(), player);
             sendPlayer(player.identity.playerId(), "question", new PublicQuestion(room.questionIndex, room.current().id(), room.current().prompt(),
                     shuffle, room.current().topic(), room.serverStart, room.endsAt, room.allowedMs, room.allowedMs,
                     room.current().imageUrl(), room.current().tableData()));
@@ -129,11 +128,27 @@ public class RoomEngine {
         long seed = Objects.hash(player.identity.playerId(), prompt.id()); Collections.shuffle(options, new Random(seed));
         return options;
     }
+    private List<Option> permuteForPlayer(Prompt prompt, Player player) {
+        List<Option> shuffled = shuffled(prompt, player);
+        List<Option> presented = new ArrayList<>(shuffled.size());
+        player.optionMapping.clear();
+        for (int i=0; i<shuffled.size(); i++) {
+            String presentedId=String.valueOf((char)('A'+i));
+            Option canonical=shuffled.get(i);
+            player.optionMapping.put(presentedId, canonical.id());
+            presented.add(new Option(presentedId, canonical.text()));
+        }
+        player.displayOptions=List.copyOf(presented);
+        return player.displayOptions;
+    }
     private void reveal(Room room) {
         if (room.task != null) room.task.cancel(false);
         room.phase = Phase.QUESTION_REVEAL; room.transitionAt = System.currentTimeMillis() + REVEAL_MS;
+        String correctText=room.current().options().stream().filter(option->option.id().equals(room.current().correctOptionId()))
+                .map(Option::text).findFirst().orElse("");
         messaging.convertAndSend(topic(room, "reveal"), Map.of("questionIndex", room.questionIndex,
-                "correctOptionId", room.current().correctOptionId(), "distribution", Map.copyOf(room.distribution), "standings", standings(room)));
+                "correctOptionId", room.current().correctOptionId(), "correctText", correctText,
+                "distribution", Map.copyOf(room.distribution), "standings", standings(room)));
         broadcastState(room);
         room.task = clock.schedule(() -> { synchronized (room) { if (room.phase == Phase.QUESTION_REVEAL) leaderboard(room); } }, REVEAL_MS, TimeUnit.MILLISECONDS);
     }
@@ -191,6 +206,7 @@ public class RoomEngine {
     private static final class Player {
         final SessionRegistry.Identity identity; int score, answersCorrect; final List<Long> responseTimes=new ArrayList<>();
         final Map<Integer,Submission> submissions=new ConcurrentHashMap<>(); final Map<String,String> optionMapping=new ConcurrentHashMap<>();
+        List<Option> displayOptions=List.of();
         final Map<String,TopicCounter> topics=new ConcurrentHashMap<>();
         Player(SessionRegistry.Identity identity) { this.identity=identity; }
     }
