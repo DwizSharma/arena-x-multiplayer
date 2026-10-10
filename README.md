@@ -87,7 +87,7 @@ Live URL: TODO (add once deployed)
 - Java 21, Spring Boot, Spring Data JPA, STOMP/WebSocket, PostgreSQL 16, Redis 7
 - Next.js, React, Tailwind CSS, framer-motion, @stomp/stompjs
 - Docker / Docker Compose
-- AI coding tools: TODO (name the tools you used, if any)
+- AI coding tools: OpenAI Codex was used as a coding assistant during implementation and documentation. Players do not interact with AI; questions and scoring are deterministic.
 - The app has no AI features, and players do not talk to an AI. Questions and scoring are deterministic.
 
 ## Who it is for
