@@ -30,6 +30,10 @@ public class RoomEngine {
             publishRoster(room); return view(room, player);
         }
     }
+    public void watch(String code) {
+        Room room = requireRoom(code);
+        synchronized (room) { publishRoster(room); broadcastState(room); }
+    }
     public void start(String code) {
         Room room = requireRoom(code);
         synchronized (room) {

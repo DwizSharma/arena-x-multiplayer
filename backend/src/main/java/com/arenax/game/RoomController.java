@@ -32,6 +32,10 @@ public class RoomController {
         SessionRegistry.Identity identity=identity(headers);
         messaging.convertAndSendToUser(identity.playerId(), "/queue/reconnect-state", engine.snapshot(code, identity.playerId()));
     }
+    @MessageMapping("/room/{code}/watch")
+    public void watch(@DestinationVariable String code, SimpMessageHeaderAccessor headers) {
+        identity(headers); engine.watch(code);
+    }
     private SessionRegistry.Identity identity(SimpMessageHeaderAccessor headers) {
         Object identity=headers.getSessionAttributes()==null?null:headers.getSessionAttributes().get("identity");
         if (!(identity instanceof SessionRegistry.Identity sessionIdentity)) throw new IllegalArgumentException("Unauthenticated session");
