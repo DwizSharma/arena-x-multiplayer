@@ -13,3 +13,13 @@ frontend/out/
 *.env.local
 *.log
 .DS_Store
+
+# Added
+.env
+node_modules/
+.next/
+target/
+*.tsbuildinfo
+next-env.d.ts
+.idea/
+.vscode/
