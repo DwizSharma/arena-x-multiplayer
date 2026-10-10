@@ -25,4 +25,7 @@ public class Question {
     public String getCorrectOptionId() { return correctOptionId; } public String getTopic() { return topic; }
     public String getDifficulty() { return difficulty; } public String getImageUrl() { return imageUrl; }
     public String getTableDataJson() { return tableDataJson; }
+    public Question copyFor(QuestionSet set) {
+        return new Question(set, prompt, optionsJson, correctOptionId, topic, difficulty, imageUrl, tableDataJson);
+    }
 }

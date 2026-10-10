@@ -1,6 +1,7 @@
 package com.arenax.domain;
 
 import com.arenax.domain.QuestionSetService.QuestionInput;
+import com.arenax.game.AdminAuthService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -13,7 +14,8 @@ import java.util.List;
 @RequestMapping("/api/question-sets")
 public class QuestionSetController {
     private final QuestionSetService service;
-    public QuestionSetController(QuestionSetService service) { this.service=service; }
+    private final AdminAuthService auth;
+    public QuestionSetController(QuestionSetService service, AdminAuthService auth) { this.service=service; this.auth=auth; }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -31,7 +33,10 @@ public class QuestionSetController {
         }
         return new CreatedQuestionSet(service.create(request.title().trim(), request.hostId(), request.questions()));
     }
-    @GetMapping("/{id}") public QuestionSetService.QuestionSetView get(@PathVariable String id) { return service.get(id); }
+    @GetMapping("/{id}") public QuestionSetService.QuestionSetView get(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String id) {
+        auth.requireAdmin(authorization);
+        return service.get(id);
+    }
 
     public record CreateQuestionSet(@NotBlank @Size(max=200) String title, String hostId,
                                     @NotEmpty @Valid List<@Valid QuestionInput> questions) {}

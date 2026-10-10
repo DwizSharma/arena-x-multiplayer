@@ -11,6 +11,7 @@ const modes = [
 ];
 
 type HostRoom = { code: string; mode: string; phase: string; playerCount: number; capacity: number; joinPath: string };
+type SetOption = { id: string; title: string; archived: boolean };
 
 async function readResponse(response: Response) {
   const body = await response.json().catch(() => ({}));
@@ -25,6 +26,7 @@ export default function AdminPage() {
   const [room, setRoom] = useState<HostRoom | null>(null);
   const [mode, setMode] = useState('CLASSIC');
   const [questionSetId, setQuestionSetId] = useState('');
+  const [questionSets, setQuestionSets] = useState<SetOption[]>([]);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
@@ -37,6 +39,13 @@ export default function AdminPage() {
       try { setRoom(JSON.parse(savedRoom) as HostRoom); } catch { sessionStorage.removeItem('arenaAdminRoom'); }
     }
   }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    void fetch(`${apiBase}/api/admin/question-sets`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' })
+      .then(readResponse).then((items: SetOption[]) => setQuestionSets(items.filter(item => !item.archived)))
+      .catch(() => undefined);
+  }, [token]);
 
   useEffect(() => {
     if (!token || !room?.code) return;
@@ -128,7 +137,7 @@ export default function AdminPage() {
       <div className="admin-grid">
         <section className="panel admin-create-card"><span className="eyebrow">ROOM SETUP</span><h2>Build your next session</h2><p className="muted">Only people with your generated room code can find this room.</p>
           <label className="admin-label" htmlFor="admin-mode">Game mode</label><div id="admin-mode" className="admin-mode-grid" role="group" aria-label="Choose a game mode">{modes.map(item => <button key={item.id} type="button" aria-pressed={mode === item.id} className={`admin-mode ${mode === item.id ? 'selected' : ''}`} onClick={() => setMode(item.id)}><span>{item.emoji}</span>{item.name}</button>)}</div>
-          <div className="field"><label htmlFor="set-id">Optional question set ID</label><input id="set-id" value={questionSetId} onChange={event => setQuestionSetId(event.target.value)} placeholder="Use the selected mode's built-in questions" maxLength={200} /></div>
+          <div className="field"><label htmlFor="set-id">Question set</label><select id="set-id" value={questionSetId} onChange={event => setQuestionSetId(event.target.value)}><option value="">Use the selected mode’s built-in questions</option>{questionSets.map(set => <option key={set.id} value={set.id}>{set.title}</option>)}</select><a className="page-link" href="/admin/questions">Manage question sets →</a></div>
           <button className="primary admin-submit" type="button" onClick={createRoom} disabled={busy}>{busy ? 'Working…' : room ? 'Create another private room →' : 'Create private room →'}</button>
         </section>
 

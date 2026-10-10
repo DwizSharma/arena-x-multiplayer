@@ -21,11 +21,12 @@ public class RoomEngine {
     private final CollegeRepository colleges;
     private final MatchHistoryRepository matches;
     private final QuestionSetService questionSets;
+    private final PlayerAnalyticsService analytics;
     private final RoomSnapshotCache cache;
     private final java.security.SecureRandom secureRandom = new java.security.SecureRandom();
     public RoomEngine(SimpMessagingTemplate messaging, CollegeRepository colleges, MatchHistoryRepository matches,
-                      QuestionSetService questionSets, RoomSnapshotCache cache) {
-        this.messaging = messaging; this.colleges = colleges; this.matches = matches; this.questionSets=questionSets; this.cache=cache;
+                      QuestionSetService questionSets, RoomSnapshotCache cache, PlayerAnalyticsService analytics) {
+        this.messaging = messaging; this.colleges = colleges; this.matches = matches; this.questionSets=questionSets; this.cache=cache; this.analytics=analytics;
     }
     @PreDestroy public void close() { clock.shutdownNow(); }
 
@@ -147,13 +148,17 @@ public class RoomEngine {
             if (!player.optionMapping.containsKey(answer.optionId())) {
                 sendPlayer(playerId, "answer-result", new SubmissionResult("INVALID_OPTION", 0, received-room.serverStart)); return;
             }
-            Submission submission = new Submission(answer.optionId(), received);
-            if (player.submissions.putIfAbsent(room.questionIndex, submission) != null) {
+            String canonicalOptionId = player.optionMapping.get(answer.optionId());
+            if (player.submissions.containsKey(room.questionIndex)) {
                 sendPlayer(playerId, "answer-result", new SubmissionResult("DUPLICATE", 0, received-room.serverStart)); return;
             }
             long elapsed = Math.max(0, received - room.serverStart);
-            boolean correct = room.current().correctOptionId().equals(player.optionMapping.get(answer.optionId()));
+            boolean correct = room.current().correctOptionId().equals(canonicalOptionId);
             int score = correct ? 500 + (int)Math.floor(500 * (1.0 - (double)elapsed / room.allowedMs)) : 0;
+            Submission submission = new Submission(canonicalOptionId, correct, score, elapsed);
+            if (player.submissions.putIfAbsent(room.questionIndex, submission) != null) {
+                sendPlayer(playerId, "answer-result", new SubmissionResult("DUPLICATE", 0, received-room.serverStart)); return;
+            }
             player.score += score; player.answersCorrect += correct ? 1 : 0; player.responseTimes.add(elapsed);
             String topic = room.current().topic() == null ? "Other" : room.current().topic();
             player.topics.computeIfAbsent(topic, ignored -> new TopicCounter()).add(correct, elapsed);
@@ -270,6 +275,24 @@ public class RoomEngine {
             college.addPoints(points); College saved = colleges.save(college);
             matches.save(new MatchHistory(room.code, saved, winner));
         });
+        List<PlayerView> finalStandings = standings(room);
+        Map<String,Integer> ranks = new HashMap<>();
+        finalStandings.forEach(player -> ranks.put(player.playerId(), player.rank()));
+        List<PlayerAnalyticsService.PlayerInput> durableResults = room.players.values().stream().map(player -> {
+            PlayerView view = finalStandings.stream().filter(candidate -> candidate.playerId().equals(player.identity.playerId())).findFirst().orElseThrow();
+            List<PlayerAnalyticsService.AnswerInput> answerRows = new ArrayList<>();
+            for (int index=0; index<room.prompts.size(); index++) {
+                Prompt prompt = room.prompts.get(index);
+                Submission submission = player.submissions.get(index);
+                answerRows.add(new PlayerAnalyticsService.AnswerInput(index, prompt.id(), prompt.prompt(), prompt.topic(),
+                        submission == null ? null : submission.canonicalOptionId(), submission != null && submission.correct(),
+                        submission == null ? 0 : submission.pointsEarned(), submission == null ? null : submission.elapsedMs()));
+            }
+            return new PlayerAnalyticsService.PlayerInput(player.identity.playerId(), player.identity.name(), player.identity.college(),
+                    player.score, ranks.get(player.identity.playerId()), player.answersCorrect, room.prompts.size(),
+                    view.accuracyPercent(), view.averageSpeedMs(), view.topics(), answerRows);
+        }).toList();
+        analytics.saveMatch(room.code, durableResults);
     }
     private String topic(Room room, String event) { return "/topic/room/"+room.code+"/"+event; }
     private void sendPlayer(String playerId, String queue, Object payload) { messaging.convertAndSendToUser(playerId, "/queue/"+queue, payload); }
@@ -322,7 +345,7 @@ public class RoomEngine {
         final Map<String,TopicCounter> topics=new ConcurrentHashMap<>();
         Player(SessionRegistry.Identity identity) { this.identity=identity; }
     }
-    private record Submission(String optionId,long receivedAt) {}
+    private record Submission(String canonicalOptionId, boolean correct, int pointsEarned, long elapsedMs) {}
     private static final class TopicCounter {
         int answered, correct; long totalSpeed;
         synchronized void add(boolean isCorrect, long speed) { answered++; if(isCorrect) correct++; totalSpeed += speed; }

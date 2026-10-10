@@ -13,14 +13,17 @@ ArenaX is a live, server-authoritative quiz arena for **Problem Statement 3: Apt
 - Four server-selected modes: Classic, Meme Rush, Quant Sprint, and Logic Lab
 - Server-side clock, first-answer-wins scoring, reconnect snapshots
 - Projector view and custom question sets stored in PostgreSQL
+- Host question-set library: create, edit, reorder, duplicate, archive, and restore sets
 - Match summaries and college points saved to PostgreSQL
+- Per-player match summaries and per-question answer analytics persisted to PostgreSQL
 - 50-player WebSocket simulation script
 - Docker Compose deployment with health checks
 
 **Left**
 - Restore active rooms after a backend restart (rooms and sessions are in memory today)
 - Support more than one backend replica (in-process scheduler and room map)
-- Persist detailed per-player answer analytics
+- Add player and college league standings with period filters
+- Add host match analytics and result export
 - Deploy to a public URL
 
 **Plan**
@@ -79,7 +82,9 @@ cd frontend && npm install && npm run dev  # terminal 2 (also from the repositor
 cd simulation && npm install && node simulate_50_players.js
 ```
 
-Custom question set: `POST /api/question-sets` with a title, host ID and questions (each needs at least two options and a matching `correctOptionId`). Start a match by sending `{"questionSetId":"<id>"}` to `/app/room/{code}/start`.
+Manage reusable question sets from **Question sets** in the faculty host console. Sets support 2–6 options per question; their JSON array order is the play order. Select a saved set when creating a room. The authenticated API is under `/api/admin/question-sets` (list/create/update, duplicate, archive/restore); requests use the admin bearer token.
+
+Completed match results are stored per player with topic summaries and one answer record per question (including unanswered questions). Retrieve a match's saved results from `GET /api/matches/{roomCode}/results`.
 
 Run a single backend instance only; active matches are cleared on restart.
 
