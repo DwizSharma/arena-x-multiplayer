@@ -72,6 +72,6 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
     void boot();
     return () => { cancelled = true; Object.values(callbacks.current).forEach(sub => sub.unsubscribe()); callbacks.current = {}; if (activeClient) void activeClient.deactivate(); if (clientRef.current === activeClient) clientRef.current = null; };
   }, [room, readCredentials, publish, anonymousView]);
-  const actions = useMemo(() => ({ start: (questionSetId?: string) => publish(`/app/room/${room}/start`, questionSetId ? { questionSetId } : {}), answer: (questionId: string, optionId: string) => publish(`/app/room/${room}/answer`, { questionId, optionId }) }), [publish, room]);
+  const actions = useMemo(() => ({ start: (questionSetId?: string, mode = 'CLASSIC') => publish(`/app/room/${room}/start`, { ...(questionSetId ? { questionSetId } : {}), mode }), answer: (questionId: string, optionId: string) => publish(`/app/room/${room}/answer`, { questionId, optionId }) }), [publish, room]);
   return { ...state, ...actions };
 }

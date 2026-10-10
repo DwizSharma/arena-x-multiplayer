@@ -14,7 +14,7 @@ public final class GameTypes {
     public record TopicAnalytics(int answered, int correct, double accuracyPercent, long averageSpeedMs) {}
     public record PlayerView(String playerId, String name, String college, int score, int rank, boolean submitted,
                              int accuracyPercent, long averageSpeedMs, Map<String,TopicAnalytics> topics) {}
-    public record Snapshot(String roomCode, Phase phase, int questionIndex, long remainingMs,
+    public record Snapshot(String roomCode, Phase phase, String mode, int questionIndex, long remainingMs,
                            List<Option> options, PublicQuestion currentQuestion, boolean submitted,
                            int score, int rank, List<PlayerView> players) {}
     public record Answer(String questionId, String optionId, Long clientTimestamp) {}

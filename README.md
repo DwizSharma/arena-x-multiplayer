@@ -3,11 +3,12 @@
 Repository: https://github.com/DwizSharma/arena-x-multiplayer
 
 ## What it does
-ArenaX is a live, server-authoritative quiz arena. Players join a room from their phones, answer timed multiple-choice questions, and see a live leaderboard, while a projector view shows standings and answer distribution on a big screen. Problem statement: **YOUR_PROBLEM_STATEMENT_NUMBER**. Statement number: **YOUR_STATEMENT_NUMBER**.
+ArenaX is a live, server-authoritative quiz arena for **Problem Statement 3: AptiQuiz**. Players join a room from their phones, answer timed aptitude questions, and see a live leaderboard, while a projector view shows standings and answer distribution on a big screen. Team statement number: **ADD YOUR TEAM STATEMENT NUMBER**.
 
 ## Done / Left / Plan
 **Done**
 - Join flow (name + college), lobby, timed questions, reveal, round leaderboard, final podium
+- Four server-selected modes: Classic, Meme Rush, Quant Sprint, and Logic Lab
 - Server-side clock, first-answer-wins scoring, reconnect snapshots
 - Projector view and custom question sets stored in PostgreSQL
 - Match summaries and college points saved to PostgreSQL
@@ -35,6 +36,7 @@ ArenaX is a live, server-authoritative quiz arena. Players join a room from thei
 - **Redis:** expiring JSON snapshots of room state; the in-memory room stays authoritative.
 - **Frontend:** Next.js (App Router) + Tailwind, with a STOMP client hook that reconnects and requests a snapshot.
 - **Room flow:** `LOBBY -> QUESTION_INTRO (3 s) -> QUESTION_ACTIVE (20-45 s) -> QUESTION_REVEAL (5 s) -> ROUND_LEADERBOARD (5 s) -> podium`. The question ends early if every player has answered.
+- **Modes:** the host can choose Classic, Meme Rush, Quant Sprint, or Logic Lab; the server selects its built-in question set and includes the mode in reconnect snapshots.
 
 ## What we added
 - Projector route (`/projector/[code]`) for auditorium display
@@ -42,6 +44,7 @@ ArenaX is a live, server-authoritative quiz arena. Players join a room from thei
 - Custom question sets via `POST /api/question-sets`
 - 50-player load simulation (`simulation/`)
 - Docker Compose deployment with health checks
+- Four focused match modes, shareable room invites, a live lobby roster, and playful reaction copy
 
 ## How to run it
 Requires Docker with the Compose plugin. No login is needed: open the app, enter a name and college, and join room `APT892`.

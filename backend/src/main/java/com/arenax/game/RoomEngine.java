@@ -42,12 +42,13 @@ public class RoomEngine {
         Room room = requireRoom(code);
         synchronized (room) { publishRoster(room); broadcastState(room); }
     }
-    public void start(String code, String questionSetId) {
+    public void start(String code, String questionSetId, String requestedMode) {
         Room room = requireRoom(code);
         synchronized (room) {
             if (room.players.isEmpty()) throw new IllegalStateException("Cannot start an empty room");
             if (room.phase != Phase.LOBBY) throw new IllegalStateException("Room has already started");
-            room.prompts = questionSetId == null || questionSetId.isBlank() ? samplePrompts() : questionSets.loadPrompts(questionSetId);
+            room.mode = normalizeMode(requestedMode);
+            room.prompts = questionSetId == null || questionSetId.isBlank() ? samplePrompts(room.mode) : questionSets.loadPrompts(questionSetId);
             room.questionIndex = 0; intro(room);
         }
     }
@@ -94,7 +95,7 @@ public class RoomEngine {
                     room.current().id(), room.current().prompt(), options, room.current().topic(), room.serverStart,
                     room.endsAt, room.allowedMs, Math.max(0, room.endsAt-System.currentTimeMillis()),
                     room.current().imageUrl(), room.current().tableData()) : null;
-            return new Snapshot(room.code, room.phase, room.questionIndex,
+            return new Snapshot(room.code, room.phase, room.mode, room.questionIndex,
                     end == 0 ? 0 : Math.max(0, end - System.currentTimeMillis()), options, currentQuestion,
                     player.submissions.containsKey(room.questionIndex), player.score, rank(room, player), standings(room));
         }
@@ -165,7 +166,7 @@ public class RoomEngine {
     }
     private void broadcastState(Room room) {
         Map<String,Object> state=Map.of("phase", room.phase, "questionIndex", room.questionIndex,
-                "remainingMs", Math.max(0, room.transitionAt-System.currentTimeMillis()));
+                "remainingMs", Math.max(0, room.transitionAt-System.currentTimeMillis()), "mode", room.mode);
         messaging.convertAndSend(topic(room, "state"), state); cache.put("room:" + room.code + ":state", state);
     }
     private void publishRoster(Room room) {
@@ -191,14 +192,41 @@ public class RoomEngine {
     private String topic(Room room, String event) { return "/topic/room/"+room.code+"/"+event; }
     private void sendPlayer(String playerId, String queue, Object payload) { messaging.convertAndSendToUser(playerId, "/queue/"+queue, payload); }
     private Room requireRoom(String code) { Room room=rooms.get(code.toUpperCase(Locale.ROOT)); if(room==null) throw new IllegalArgumentException("Unknown room"); return room; }
-    private List<Prompt> samplePrompts() { return List.of(
-        new Prompt("apt-1","A train travels 120 km in 2 hours. What is its average speed?",List.of(new Option("A","40 km/h"),new Option("B","50 km/h"),new Option("C","60 km/h"),new Option("D","80 km/h")),"C","Quant",20,null,List.of()),
-        new Prompt("apt-2","Choose the word closest in meaning to concise.",List.of(new Option("A","Brief"),new Option("B","Vague"),new Option("C","Loud"),new Option("D","Formal")),"A","Verbal",25,null,List.of()),
-        new Prompt("apt-3","Find the next number: 2, 6, 12, 20, ?",List.of(new Option("A","24"),new Option("B","28"),new Option("C","30"),new Option("D","32")),"B","Logical",30,null,List.of())); }
+    private String normalizeMode(String mode) {
+        if (mode == null || mode.isBlank()) return "CLASSIC";
+        String normalized = mode.trim().toUpperCase(Locale.ROOT);
+        return Set.of("CLASSIC", "MEME_RUSH", "QUANT_SPRINT", "LOGIC_LAB").contains(normalized) ? normalized : "CLASSIC";
+    }
+    private List<Prompt> samplePrompts(String mode) {
+        return switch (mode) {
+            case "MEME_RUSH" -> List.of(
+                new Prompt("meme-1","POV: the placement test asks for 15% of 240. Your calculator is on a coffee break. **What is it?**",List.of(new Option("A","24"),new Option("B","36"),new Option("C","40"),new Option("D","48")),"B","Quant",20,null,List.of()),
+                new Prompt("meme-2","The group project has 4 people and 18 tasks. If work is split equally, how many tasks per person? No side quests.",List.of(new Option("A","3"),new Option("B","4"),new Option("C","4.5"),new Option("D","6")),"C","Quant",20,null,List.of()),
+                new Prompt("meme-3","A train meme says: 90 km in 1.5 hours. The train is somehow on time. What is its average speed?",List.of(new Option("A","45 km/h"),new Option("B","60 km/h"),new Option("C","75 km/h"),new Option("D","90 km/h")),"B","Quant",20,null,List.of()),
+                new Prompt("meme-4","The sequence is 3, 6, 12, 24, __. The pattern is doing all the work here.",List.of(new Option("A","30"),new Option("B","36"),new Option("C","42"),new Option("D","48")),"D","Logical",20,null,List.of()),
+                new Prompt("meme-5","Choose the closest meaning of **resilient**. Main-character comeback energy.",List.of(new Option("A","Fragile"),new Option("B","Adaptable"),new Option("C","Careless"),new Option("D","Ordinary")),"B","Verbal",20,null,List.of()));
+            case "QUANT_SPRINT" -> List.of(
+                new Prompt("quant-1","A product marked ₹800 gets a 15% discount. What is the sale price?",List.of(new Option("A","₹620"),new Option("B","₹660"),new Option("C","₹680"),new Option("D","₹720")),"C","Quant",20,null,List.of()),
+                new Prompt("quant-2","A car covers 150 km in 2.5 hours. Find its average speed.",List.of(new Option("A","50 km/h"),new Option("B","55 km/h"),new Option("C","60 km/h"),new Option("D","65 km/h")),"C","Quant",20,null,List.of()),
+                new Prompt("quant-3","The ratio of two numbers is 3:5 and their sum is 64. What is the smaller number?",List.of(new Option("A","18"),new Option("B","24"),new Option("C","32"),new Option("D","40")),"B","Quant",20,null,List.of()),
+                new Prompt("quant-4","A can finish a task in 12 days. At the same rate, what fraction is done in 3 days?",List.of(new Option("A","1/2"),new Option("B","1/3"),new Option("C","1/4"),new Option("D","1/6")),"C","Quant",20,null,List.of()),
+                new Prompt("quant-5","What is the simple interest on ₹2,000 at 5% per year for 2 years?",List.of(new Option("A","₹100"),new Option("B","₹150"),new Option("C","₹200"),new Option("D","₹250")),"C","Quant",20,null,List.of()));
+            case "LOGIC_LAB" -> List.of(
+                new Prompt("logic-1","Find the next number: 2, 6, 12, 20, ?",List.of(new Option("A","24"),new Option("B","28"),new Option("C","30"),new Option("D","32")),"C","Logical",20,null,List.of()),
+                new Prompt("logic-2","All Bloops are Razzies. All Razzies are Lazzies. Which statement must be true?",List.of(new Option("A","All Bloops are Lazzies"),new Option("B","All Lazzies are Bloops"),new Option("C","No Bloops are Lazzies"),new Option("D","Some Razzies are not Bloops")),"A","Logical",20,null,List.of()),
+                new Prompt("logic-3","If yesterday was two days before Friday, what day is tomorrow?",List.of(new Option("A","Thursday"),new Option("B","Friday"),new Option("C","Saturday"),new Option("D","Sunday")),"B","Logical",20,null,List.of()),
+                new Prompt("logic-4","Choose the odd one out: square, triangle, circle, cube.",List.of(new Option("A","Square"),new Option("B","Triangle"),new Option("C","Circle"),new Option("D","Cube")),"D","Logical",20,null,List.of()),
+                new Prompt("logic-5","A is taller than B. B is taller than C. Who is shortest?",List.of(new Option("A","A"),new Option("B","B"),new Option("C","C"),new Option("D","Cannot tell")),"C","Logical",20,null,List.of()));
+            default -> List.of(
+                new Prompt("apt-1","A train travels 120 km in 2 hours. What is its average speed?",List.of(new Option("A","40 km/h"),new Option("B","50 km/h"),new Option("C","60 km/h"),new Option("D","80 km/h")),"C","Quant",20,null,List.of()),
+                new Prompt("apt-2","Choose the word closest in meaning to concise.",List.of(new Option("A","Brief"),new Option("B","Vague"),new Option("C","Loud"),new Option("D","Formal")),"A","Verbal",25,null,List.of()),
+                new Prompt("apt-3","Find the next number: 2, 6, 12, 20, ?",List.of(new Option("A","24"),new Option("B","28"),new Option("C","30"),new Option("D","32")),"C","Logical",30,null,List.of()));
+        };
+    }
 
     private static final class Room {
         final String code; final Map<String,Player> players=new ConcurrentHashMap<>(); Phase phase=Phase.LOBBY;
-        List<Prompt> prompts=List.of(); int questionIndex; long serverStart, endsAt, allowedMs, transitionAt;
+        List<Prompt> prompts=List.of(); String mode="CLASSIC"; int questionIndex; long serverStart, endsAt, allowedMs, transitionAt;
         ScheduledFuture<?> task; final Map<String,Integer> distribution=new HashMap<>();
         Room(String code) { this.code=code; }
         Prompt current() { return prompts.get(questionIndex); }
