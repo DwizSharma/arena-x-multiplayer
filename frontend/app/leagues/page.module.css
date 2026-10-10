@@ -1,0 +1,107 @@
+.leagueShell :global(.league-tabs) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -8px 0 18px;
+}
+
+.leagueShell :global(.league-tabs button) {
+  padding: 10px 14px;
+  border: 1px solid #3b4262;
+  border-radius: 10px;
+  background: #202642;
+  color: #e7e9f5;
+  font: 600 11px Manrope, sans-serif;
+  cursor: pointer;
+}
+
+.leagueShell :global(.league-tabs button.active) {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+
+.leagueShell :global(.league-tabs button:focus-visible) {
+  outline: 3px solid var(--lime);
+  outline-offset: 2px;
+}
+
+.leagueShell :global(.league-grid) {
+  display: grid;
+  grid-template-columns: 1.15fr .85fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.leagueShell :global(.league-heading) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 17px;
+}
+
+.leagueShell :global(.league-heading h2) {
+  margin-top: 6px;
+}
+
+.leagueShell :global(.league-table-scroll) {
+  overflow-x: auto;
+}
+
+.leagueShell :global(.league-table) {
+  min-width: 650px;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.leagueShell :global(.college-table) {
+  min-width: 500px;
+}
+
+.leagueShell :global(.league-table th) {
+  padding: 10px 9px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font: 10px 'DM Mono', monospace;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.leagueShell :global(.league-table td) {
+  padding: 12px 9px;
+  border: 0;
+  border-bottom: 1px solid #ffffff10;
+  color: #d8daea;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.leagueShell :global(.league-table td strong),
+.leagueShell :global(.league-table td small) {
+  display: block;
+}
+
+.leagueShell :global(.league-table td small) {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.leagueShell :global(.league-table .league-rank) {
+  color: var(--lime);
+  font: 600 12px 'DM Mono', monospace;
+}
+
+.leagueShell :global(.league-empty) {
+  padding: 18px 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 900px) {
+  .leagueShell :global(.league-grid) {
+    grid-template-columns: 1fr;
+  }
+}

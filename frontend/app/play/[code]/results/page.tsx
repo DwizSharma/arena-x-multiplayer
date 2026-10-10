@@ -1,22 +1,23 @@
 'use client';
 import { motion } from 'framer-motion';
 import { useParams } from 'next/navigation';
+import { API_BASE_URL } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { useArenaSocket } from '@/lib/socket/useArenaSocket';
 export default function Results() {
   const { code } = useParams<{ code: string }>();
   const arena = useArenaSocket(code);
   const [persistedPlayers, setPersistedPlayers] = useState<any[]>([]);
+  const [selfId, setSelfId] = useState('');
   useEffect(() => {
-    const api = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081';
-    void fetch(`${api}/api/matches/${encodeURIComponent(code)}/results`, { cache: 'no-store' })
+    setSelfId(sessionStorage.getItem('playerId') || '');
+    void fetch(`${API_BASE_URL}/api/matches/${encodeURIComponent(code)}/results`, { cache: 'no-store' })
       .then(response => response.ok ? response.json() : [])
       .then(items => { if (Array.isArray(items)) setPersistedPlayers(items); })
       .catch(() => undefined);
   }, [code]);
   const players = persistedPlayers.length ? persistedPlayers : arena.result?.length ? arena.result : arena.snapshot?.players || arena.leaderboard;
   const podium = [players[1], players[0], players[2]].filter(Boolean);
-  const selfId = typeof window === 'undefined' ? '' : sessionStorage.getItem('playerId');
   const self = players.find((p: any) => p.playerId === selfId);
   return <main className="app-shell">
     <div className="topbar"><a className="page-link" href={`/play/${code}`}>← Back to arena</a><span className="eyebrow">FINAL RESULTS</span></div>

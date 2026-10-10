@@ -13,7 +13,7 @@ import java.util.List;
 @RequestMapping("/api/admin/question-sets")
 public class AdminQuestionSetController {
     public record SaveSet(@NotBlank @Size(max = 200) String title,
-                          @NotEmpty @Valid List<@Valid QuestionSetService.QuestionInput> questions) {}
+                          @NotEmpty @Valid List<QuestionSetService.QuestionInput> questions) {}
     public record ArchiveRequest(boolean archived) {}
     public record Created(String id) {}
 

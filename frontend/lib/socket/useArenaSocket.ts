@@ -1,5 +1,6 @@
 'use client';
 import { Client, IMessage, ReconnectionTimeMode, StompSubscription } from '@stomp/stompjs';
+import { API_BASE_URL } from '../api';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 export type ArenaState = { connected: boolean; phase: string; question: any; roster: any[]; progress: any; reveal: any; leaderboard: any[]; result: any[]; snapshot: any; answerResult: any; moment: any; error: string | null };
@@ -24,7 +25,7 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
     let credentials = readCredentials();
     if (!credentials && anonymousView) {
       try {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `Projector_${room}`, college: 'ArenaX Projector' }) });
+        const response = await fetch(`${API_BASE_URL}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `Projector_${room}`, college: 'ArenaX Projector' }) });
         if (response.ok) credentials = await response.json();
       } catch { setState(s => ({ ...s, error: 'Unable to connect to the ArenaX server' })); }
     }

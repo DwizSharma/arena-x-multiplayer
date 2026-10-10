@@ -1,8 +1,9 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import { API_BASE_URL } from '@/lib/api';
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081';
+const apiBase = API_BASE_URL;
 const modes = [
   { id: 'CLASSIC', name: 'Classic arena', emoji: '🏁' },
   { id: 'MEME_RUSH', name: 'Meme rush', emoji: '💀' },
@@ -12,6 +13,7 @@ const modes = [
 
 type HostRoom = { code: string; mode: string; phase: string; playerCount: number; capacity: number; joinPath: string };
 type SetOption = { id: string; title: string; archived: boolean };
+type MatchAnalytics = { players: number; questionsPerPlayer: number; totalPoints: number; averageAccuracyPercent: number; playersResult: { playerId: string; name: string; college: string; score: number; rank: number; accuracyPercent: number }[] };
 
 async function readResponse(response: Response) {
   const body = await response.json().catch(() => ({}));
@@ -27,6 +29,7 @@ export default function AdminPage() {
   const [mode, setMode] = useState('CLASSIC');
   const [questionSetId, setQuestionSetId] = useState('');
   const [questionSets, setQuestionSets] = useState<SetOption[]>([]);
+  const [matchAnalytics, setMatchAnalytics] = useState<MatchAnalytics | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
@@ -63,6 +66,19 @@ export default function AdminPage() {
     const interval = window.setInterval(() => void refresh(), 2500);
     return () => { alive = false; window.clearInterval(interval); };
   }, [token, room?.code]);
+
+  useEffect(() => {
+    if (!token || !room?.code || room.phase !== 'FINAL_PODIUM') {
+      setMatchAnalytics(null);
+      return;
+    }
+    let alive = true;
+    void fetch(`${apiBase}/api/admin/matches/${encodeURIComponent(room.code)}/analytics`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' })
+      .then(readResponse)
+      .then((value: MatchAnalytics) => { if (alive) setMatchAnalytics(value); })
+      .catch(reason => { if (alive) setError(reason instanceof Error ? reason.message : 'Could not load match analytics.'); });
+    return () => { alive = false; };
+  }, [token, room?.code, room?.phase]);
 
   async function signIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(''); setBusy(true);
@@ -113,6 +129,20 @@ export default function AdminPage() {
     catch { setError('Clipboard access is unavailable. Share the room code: ' + room.code); }
   }
 
+  async function downloadMatchCsv() {
+    if (!room) return;
+    try {
+      const response = await fetch(`${apiBase}/api/admin/matches/${encodeURIComponent(room.code)}/export.csv`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) await readResponse(response);
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `arenax-${room.code}-results.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not export match results.'); }
+  }
+
   async function signOut() {
     if (token) await fetch(`${apiBase}/api/admin/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => undefined);
     sessionStorage.removeItem('arenaAdminToken'); sessionStorage.removeItem('arenaAdminRoom');
@@ -142,7 +172,7 @@ export default function AdminPage() {
         </section>
 
         <section className="panel admin-live-card"><div className="admin-live-heading"><div><span className="eyebrow">LIVE ROOM CONTROL</span><h2>{room ? `Room ${room.code}` : 'Your room will appear here'}</h2></div>{room && <span className="host-phase">{room.phase.replaceAll('_', ' ')}</span>}</div>
-          {room ? <><div className="private-code"><span>STUDENT JOIN CODE</span><strong>{room.code}</strong></div><div className="room-stats"><span><b>{room.playerCount}</b>/{room.capacity} students in lobby</span><span>{selectedMode.emoji} {selectedMode.name}</span></div><div className="admin-room-actions"><button type="button" className="secondary" onClick={copyInvite}>{copied ? 'Invite copied ✓' : 'Copy student invite ↗'}</button><button type="button" className="primary" onClick={startRoom} disabled={busy || room.playerCount < 1 || room.phase !== 'LOBBY'}>{matchRunning ? 'Match is live ✓' : room.phase === 'FINAL_PODIUM' ? 'Match complete' : room.playerCount ? 'Start match →' : 'Waiting for students…'}</button></div><p className="invite-url">Invite link: <code>{room.joinPath}</code></p><div className="fun-control"><span className="eyebrow">BETWEEN-ROUND ENERGY</span><p>Launch a quick, score-free room vote. It never changes standings.</p><div className="fun-buttons"><button type="button" className="secondary" disabled={busy || !canLaunchMoment} onClick={() => launchMoment('HYPE_CHECK')}>🔥 Hype check</button><button type="button" className="secondary" disabled={busy || !canLaunchMoment} onClick={() => launchMoment('MEME_BREAK')}>💀 Meme break</button><button type="button" className="secondary" disabled={busy || !canLaunchMoment} onClick={() => launchMoment('BRAIN_BREAK')}>🍕 Brain break</button></div></div></> : <div className="admin-empty"><div className="empty-icon">🎟️</div><p>Create a room to get a unique join code and live controls.</p></div>}
+          {room ? <><div className="private-code"><span>STUDENT JOIN CODE</span><strong>{room.code}</strong></div><div className="room-stats"><span><b>{room.playerCount}</b>/{room.capacity} students in lobby</span><span>{selectedMode.emoji} {selectedMode.name}</span></div><div className="admin-room-actions"><button type="button" className="secondary" onClick={copyInvite}>{copied ? 'Invite copied ✓' : 'Copy student invite ↗'}</button><button type="button" className="primary" onClick={startRoom} disabled={busy || room.playerCount < 1 || room.phase !== 'LOBBY'}>{matchRunning ? 'Match is live ✓' : room.phase === 'FINAL_PODIUM' ? 'Match complete' : room.playerCount ? 'Start match →' : 'Waiting for students…'}</button></div><p className="invite-url">Invite link: <code>{room.joinPath}</code></p><div className="fun-control"><span className="eyebrow">BETWEEN-ROUND ENERGY</span><p>Launch a quick, score-free room vote. It never changes standings.</p><div className="fun-buttons"><button type="button" className="secondary" disabled={busy || !canLaunchMoment} onClick={() => launchMoment('HYPE_CHECK')}>🔥 Hype check</button><button type="button" className="secondary" disabled={busy || !canLaunchMoment} onClick={() => launchMoment('MEME_BREAK')}>💀 Meme break</button><button type="button" className="secondary" disabled={busy || !canLaunchMoment} onClick={() => launchMoment('BRAIN_BREAK')}>🍕 Brain break</button></div></div>{room.phase === 'FINAL_PODIUM' && <div className="fun-control"><span className="eyebrow">MATCH REPORT</span>{matchAnalytics ? <><div className="room-stats"><span><b>{matchAnalytics.players}</b> players</span><span><b>{matchAnalytics.questionsPerPlayer}</b> questions each</span></div><div className="room-stats"><span><b>{matchAnalytics.totalPoints.toLocaleString()}</b> total points</span><span><b>{Math.round(matchAnalytics.averageAccuracyPercent)}%</b> average accuracy</span></div><div className="fun-buttons">{matchAnalytics.playersResult.slice(0, 5).map(player => <span key={player.playerId} className="host-phase">#{player.rank} {player.name} · {player.score.toLocaleString()} pts</span>)}</div></> : <p className="muted">Loading final standings…</p>}<button type="button" className="secondary" style={{ marginTop: 12 }} onClick={() => void downloadMatchCsv()}>Download results CSV ↓</button></div>}</> : <div className="admin-empty"><div className="empty-icon">🎟️</div><p>Create a room to get a unique join code and live controls.</p></div>}
           {error && <p className="error" role="alert">{error}</p>}{notice && <p className="admin-notice" role="status">{notice}</p>}
         </section>
       </div>

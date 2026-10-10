@@ -1,8 +1,9 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import { API_BASE_URL } from '@/lib/api';
 
-const api = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081';
+const api = API_BASE_URL;
 type Question = { prompt: string; options: { id: string; text: string }[]; correctOptionId: string; topic?: string; difficulty?: string; imageUrl?: string; tableData?: string[][] };
 type QuestionSet = { id: string; title: string; archived: boolean; questions: Question[] };
 const example = JSON.stringify([{ prompt: 'What is 15% of 200?', options: [{ id: 'A', text: '20' }, { id: 'B', text: '30' }, { id: 'C', text: '40' }, { id: 'D', text: '50' }], correctOptionId: 'B', topic: 'Quant', difficulty: 'Easy' }], null, 2);

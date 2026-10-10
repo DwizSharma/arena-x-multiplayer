@@ -5,8 +5,10 @@ import com.arenax.domain.*;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 import jakarta.annotation.PreDestroy;
+import jakarta.annotation.PostConstruct;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 
 @Component
 public class RoomEngine {
@@ -18,19 +20,171 @@ public class RoomEngine {
         Thread t = new Thread(r, "arena-room-clock"); t.setDaemon(true); return t;
     });
     private final SimpMessagingTemplate messaging;
-    private final CollegeRepository colleges;
-    private final MatchHistoryRepository matches;
     private final QuestionSetService questionSets;
-    private final PlayerAnalyticsService analytics;
+    private final MatchFinalizationService finalization;
     private final RoomSnapshotCache cache;
+    private final DistributedRoomCoordinator coordinator;
     private final java.security.SecureRandom secureRandom = new java.security.SecureRandom();
-    public RoomEngine(SimpMessagingTemplate messaging, CollegeRepository colleges, MatchHistoryRepository matches,
-                      QuestionSetService questionSets, RoomSnapshotCache cache, PlayerAnalyticsService analytics) {
-        this.messaging = messaging; this.colleges = colleges; this.matches = matches; this.questionSets=questionSets; this.cache=cache; this.analytics=analytics;
+    public RoomEngine(SimpMessagingTemplate messaging, QuestionSetService questionSets, RoomSnapshotCache cache,
+                      MatchFinalizationService finalization,
+                      DistributedRoomCoordinator coordinator) {
+        this.messaging = messaging; this.questionSets=questionSets; this.cache=cache; this.finalization=finalization; this.coordinator=coordinator;
     }
     @PreDestroy public void close() { clock.shutdownNow(); }
 
-    public synchronized PlayerView join(String code, SessionRegistry.Identity identity) {
+    public void refreshFromSharedSnapshot(String code) {
+        RoomStateSnapshot saved=cache.getCritical("room-state:"+code,RoomStateSnapshot.class);
+        if(saved==null)return;
+        Room room=rooms.computeIfAbsent(code,Room::new);
+        synchronized(room) {
+            room.phase=saved.phase(); room.prompts=saved.prompts(); room.mode=saved.mode(); room.questionSetId=saved.questionSetId();
+            room.hostManaged=saved.hostManaged(); room.questionIndex=saved.questionIndex(); room.serverStart=saved.serverStart();
+            room.endsAt=saved.endsAt(); room.allowedMs=saved.allowedMs(); room.transitionAt=saved.transitionAt();
+            room.distribution.clear(); room.distribution.putAll(saved.distribution()); room.players.clear();
+            room.momentId=saved.momentId(); room.momentKind=saved.momentKind(); room.momentPrompt=saved.momentPrompt();
+            room.momentClosesAt=saved.momentClosesAt(); room.momentOptions=saved.momentOptions()==null?List.of():saved.momentOptions();
+            room.momentCounts.clear(); if(saved.momentCounts()!=null)room.momentCounts.putAll(saved.momentCounts());
+            room.momentVotes.clear(); if(saved.momentVotes()!=null)room.momentVotes.putAll(saved.momentVotes());
+            for(RoomStateSnapshot.PlayerState state:saved.players()) {
+                Player player=new Player(state.identity()); player.score=state.score(); player.answersCorrect=state.answersCorrect();
+                player.responseTimes.addAll(state.responseTimes()); player.optionMapping.putAll(state.optionMapping());
+                state.submissions().forEach((index,value)->player.submissions.put(index,new Submission(value.canonicalOptionId(),value.correct(),value.pointsEarned(),value.elapsedMs())));
+                state.submissions().forEach((index,value)->{
+                    if(index>=0&&index<room.prompts.size()) {
+                        Prompt prompt=room.prompts.get(index);
+                        player.topics.computeIfAbsent(prompt.topic()==null?"Other":prompt.topic(),ignored->new TopicCounter()).add(value.correct(),value.elapsedMs());
+                    }
+                });
+                if(room.questionIndex>=0&&room.questionIndex<room.prompts.size()) player.displayOptions=permuteForPlayer(room.current(),player);
+                room.players.put(player.identity.playerId(),player);
+            }
+            ensureTransitionScheduled(room);
+            ensureMomentScheduled(room);
+        }
+    }
+
+    @PostConstruct public void recoverRooms() {
+        for (RoomStateSnapshot saved : cache.getRoomSnapshots()) {
+            Room room = new Room(saved.code());
+            room.phase=saved.phase(); room.prompts=saved.prompts(); room.mode=saved.mode(); room.questionSetId=saved.questionSetId();
+            room.hostManaged=saved.hostManaged(); room.questionIndex=saved.questionIndex(); room.serverStart=saved.serverStart();
+            room.endsAt=saved.endsAt(); room.allowedMs=saved.allowedMs(); room.transitionAt=saved.transitionAt();
+            room.distribution.putAll(saved.distribution());
+            room.momentId=saved.momentId(); room.momentKind=saved.momentKind(); room.momentPrompt=saved.momentPrompt();
+            room.momentClosesAt=saved.momentClosesAt(); room.momentOptions=saved.momentOptions()==null?List.of():saved.momentOptions();
+            if(saved.momentCounts()!=null)room.momentCounts.putAll(saved.momentCounts());
+            if(saved.momentVotes()!=null)room.momentVotes.putAll(saved.momentVotes());
+            for (RoomStateSnapshot.PlayerState state : saved.players()) {
+                Player player=new Player(state.identity()); player.score=state.score(); player.answersCorrect=state.answersCorrect();
+                player.responseTimes.addAll(state.responseTimes()); player.optionMapping.putAll(state.optionMapping());
+                state.submissions().forEach((index, value) -> player.submissions.put(index,
+                        new Submission(value.canonicalOptionId(),value.correct(),value.pointsEarned(),value.elapsedMs())));
+                state.submissions().forEach((index, value) -> {
+                    if(index>=0 && index<room.prompts.size()) {
+                        Prompt prompt=room.prompts.get(index);
+                        player.topics.computeIfAbsent(prompt.topic()==null?"Other":prompt.topic(),ignored->new TopicCounter())
+                                .add(value.correct(),value.elapsedMs());
+                    }
+                });
+                if(room.questionIndex>=0 && room.questionIndex<room.prompts.size())
+                    player.displayOptions=permuteForPlayer(room.current(),player);
+                room.players.put(player.identity.playerId(),player);
+            }
+            if(rooms.putIfAbsent(room.code,room)!=null) continue;
+            synchronized(room) {
+                switch(room.phase) {
+                    case QUESTION_INTRO -> scheduleTransition(room,Math.max(0,room.transitionAt-System.currentTimeMillis()),room.phase,this::activate);
+                    case QUESTION_ACTIVE -> scheduleTransition(room,Math.max(0,room.endsAt+JITTER_MS-System.currentTimeMillis()),room.phase,this::reveal);
+                    case QUESTION_REVEAL -> scheduleTransition(room,Math.max(0,room.transitionAt-System.currentTimeMillis()),room.phase,this::leaderboard);
+                    case ROUND_LEADERBOARD -> scheduleTransition(room,Math.max(0,room.transitionAt-System.currentTimeMillis()),room.phase,this::advanceAfterLeaderboard);
+                    default -> { }
+                }
+                ensureMomentScheduled(room);
+                publishRoster(room); broadcastState(room);
+            }
+        }
+        clock.scheduleAtFixedRate(this::reconcileRooms,2,2,TimeUnit.SECONDS);
+    }
+
+    private void reconcileRooms() {
+        for(RoomStateSnapshot state:cache.getRoomSnapshots()) {
+            try(var lock=coordinator.acquire(state.code())) {
+                refreshFromSharedSnapshot(state.code());
+                Room room=rooms.get(state.code()); if(room!=null) synchronized(room) { ensureTransitionScheduled(room); }
+            } catch(RuntimeException error) { /* Retry transient coordination failures on the next pass. */ }
+        }
+    }
+
+    private void ensureTransitionScheduled(Room room) {
+        if(room.phase==Phase.QUESTION_INTRO) scheduleTransition(room,Math.max(0,room.transitionAt-System.currentTimeMillis()),room.phase,this::activate);
+        else if(room.phase==Phase.QUESTION_ACTIVE) scheduleTransition(room,Math.max(0,room.endsAt+JITTER_MS-System.currentTimeMillis()),room.phase,this::reveal);
+        else if(room.phase==Phase.QUESTION_REVEAL) scheduleTransition(room,Math.max(0,room.transitionAt-System.currentTimeMillis()),room.phase,this::leaderboard);
+        else if(room.phase==Phase.ROUND_LEADERBOARD) scheduleTransition(room,Math.max(0,room.transitionAt-System.currentTimeMillis()),room.phase,this::advanceAfterLeaderboard);
+        else if(room.task!=null) { room.task.cancel(false); room.task=null; room.scheduledPhase=null; room.scheduledAt=0; }
+    }
+
+    private void scheduleTransition(Room room,long delay,Phase phase,Consumer<Room> action) {
+        long scheduledAt=phase==Phase.QUESTION_ACTIVE?room.endsAt+JITTER_MS:room.transitionAt;
+        if(room.scheduledPhase==phase && room.scheduledAt==scheduledAt)return;
+        if(room.task!=null)room.task.cancel(false);
+        room.scheduledPhase=phase;room.scheduledAt=scheduledAt;
+        room.task=clock.schedule(()->runTransition(room.code,phase,action),delay,TimeUnit.MILLISECONDS);
+    }
+
+    private void runTransition(String code,Phase expected,Consumer<Room> action) {
+        Room room=null;
+        try(var lock=coordinator.acquire(code)) {
+            refreshFromSharedSnapshot(code);
+            room=rooms.get(code); if(room==null)return;
+            synchronized(room) {
+                if(room.phase==expected) {
+                    room.scheduledPhase=null; room.scheduledAt=0;
+                    action.accept(room);
+                }
+            }
+        } catch(RuntimeException error) { /* The next reconciliation pass schedules the transition again. */ }
+        finally { if(room!=null) synchronized(room) { ensureTransitionScheduled(room); } }
+    }
+
+    private void ensureMomentScheduled(Room room) {
+        if(room.momentId==null || room.momentId.isBlank()) { room.momentScheduledId=null; return; }
+        if(room.momentId.equals(room.momentScheduledId))return;
+        if(room.momentTask!=null)room.momentTask.cancel(false);
+        String id=room.momentId; room.momentScheduledId=id;
+        room.momentTask=clock.schedule(()->closeMoment(room.code,id),Math.max(0,room.momentClosesAt-System.currentTimeMillis()),TimeUnit.MILLISECONDS);
+    }
+
+    private void closeMoment(String code,String expectedId) {
+        Room room=null;
+        try(var lock=coordinator.acquire(code)) {
+            refreshFromSharedSnapshot(code);
+            room=rooms.get(code); if(room==null)return;
+            synchronized(room) {
+                if(expectedId.equals(room.momentId) && System.currentTimeMillis()>=room.momentClosesAt) {
+                    messaging.convertAndSend(topic(room,"moment"),new RoomMoment(room.momentId,room.momentKind,
+                            room.momentPrompt,room.momentOptions,Map.copyOf(room.momentCounts),room.momentClosesAt,false));
+                    room.momentId=null; room.momentScheduledId=null; persistRoom(room);
+                }
+            }
+        } catch(RuntimeException error) { /* Reconciliation retries moment closure. */ }
+        finally { if(room!=null) synchronized(room) { if(expectedId.equals(room.momentId)&&expectedId.equals(room.momentScheduledId)) { room.momentScheduledId=null; ensureMomentScheduled(room); } } }
+    }
+
+    private void persistRoom(Room room) {
+        List<RoomStateSnapshot.PlayerState> players=room.players.values().stream().map(player -> {
+            Map<Integer,RoomStateSnapshot.SubmissionState> submissions=new HashMap<>();
+            player.submissions.forEach((index,value)->submissions.put(index,new RoomStateSnapshot.SubmissionState(
+                    value.canonicalOptionId(),value.correct(),value.pointsEarned(),value.elapsedMs())));
+            return new RoomStateSnapshot.PlayerState(player.identity,player.score,player.answersCorrect,
+                    List.copyOf(player.responseTimes),Map.copyOf(submissions),Map.copyOf(player.optionMapping));
+        }).toList();
+        cache.putCritical("room-state:"+room.code,new RoomStateSnapshot(room.code,room.phase,room.prompts,room.mode,
+                room.questionSetId,room.hostManaged,room.questionIndex,room.serverStart,room.endsAt,room.allowedMs,
+                room.transitionAt,Map.copyOf(room.distribution),players,room.momentId,room.momentKind,room.momentPrompt,
+                room.momentClosesAt,List.copyOf(room.momentOptions),Map.copyOf(room.momentCounts),Map.copyOf(room.momentVotes)));
+    }
+
+    @SharedRoomOperation public synchronized PlayerView join(String code, SessionRegistry.Identity identity) {
         Room room = rooms.computeIfAbsent(code.toUpperCase(Locale.ROOT), Room::new);
         synchronized (room) {
             Player player = room.players.get(identity.playerId());
@@ -41,7 +195,7 @@ public class RoomEngine {
             publishRoster(room); return view(room, player);
         }
     }
-    public AdminRoomView createPrivateRoom(String mode, String questionSetId) {
+    @SharedRoomOperation(global=true) public AdminRoomView createPrivateRoom(String mode, String questionSetId) {
         for (int attempt = 0; attempt < 12; attempt++) {
             StringBuilder code = new StringBuilder();
             for (int i = 0; i < 10; i++) code.append(ROOM_CODE_CHARS[secureRandom.nextInt(ROOM_CODE_CHARS.length)]);
@@ -49,12 +203,12 @@ public class RoomEngine {
             room.hostManaged = true;
             room.mode = normalizeMode(mode);
             room.questionSetId = questionSetId == null || questionSetId.isBlank() ? null : questionSetId.trim();
-            if (rooms.putIfAbsent(room.code, room) == null) return adminView(room);
+            if (rooms.putIfAbsent(room.code, room) == null) { synchronized(room) { persistRoom(room); } return adminView(room); }
         }
         throw new IllegalStateException("Could not allocate a room code. Try again.");
     }
-    public AdminRoomView adminRoom(String code) { return adminView(requireRoom(code)); }
-    public AdminRoomView startPrivateRoom(String code) {
+    @SharedRoomOperation public AdminRoomView adminRoom(String code) { return adminView(requireRoom(code)); }
+    @SharedRoomOperation public AdminRoomView startPrivateRoom(String code) {
         Room room = requireRoom(code);
         synchronized (room) {
             if (!room.hostManaged) throw new IllegalArgumentException("This room is not host-managed");
@@ -62,7 +216,7 @@ public class RoomEngine {
             return adminView(room);
         }
     }
-    public RoomMoment launchMoment(String code, String requestedKind) {
+    @SharedRoomOperation public RoomMoment launchMoment(String code, String requestedKind) {
         Room room = requireRoom(code);
         synchronized (room) {
             if (room.phase == Phase.LOBBY || room.phase == Phase.FINAL_PODIUM)
@@ -77,26 +231,18 @@ public class RoomEngine {
                 default -> throw new IllegalArgumentException("Choose a supported fun moment");
             }
             if (room.momentTask != null) room.momentTask.cancel(false);
+            room.momentCounts.clear();
+            room.momentVotes.clear();
             room.momentId = UUID.randomUUID().toString(); room.momentKind = kind; room.momentPrompt = prompt;
-            room.momentOptions = options; room.momentCounts.clear(); room.momentVotes.clear();
             options.forEach(option -> room.momentCounts.put(option, 0));
             room.momentClosesAt = System.currentTimeMillis() + 12_000;
             RoomMoment moment = momentView(room);
+            persistRoom(room); ensureMomentScheduled(room);
             messaging.convertAndSend(topic(room, "moment"), moment);
-            String activeMoment = room.momentId;
-            room.momentTask = clock.schedule(() -> {
-                synchronized (room) {
-                    if (activeMoment.equals(room.momentId)) {
-                        messaging.convertAndSend(topic(room, "moment"), new RoomMoment(room.momentId, room.momentKind,
-                                room.momentPrompt, room.momentOptions, Map.copyOf(room.momentCounts), room.momentClosesAt, false));
-                        room.momentId = null;
-                    }
-                }
-            }, 12_000, TimeUnit.MILLISECONDS);
             return moment;
         }
     }
-    public void voteMoment(String code, String playerId, MomentVote vote) {
+    @SharedRoomOperation public void voteMoment(String code, String playerId, MomentVote vote) {
         Room room = requireRoom(code);
         synchronized (room) {
             if (vote == null || vote.choice() == null || room.momentId == null || !room.momentId.equals(vote.momentId())
@@ -104,6 +250,7 @@ public class RoomEngine {
             if (!room.players.containsKey(playerId) || !room.momentCounts.containsKey(vote.choice())) return;
             if (room.momentVotes.putIfAbsent(playerId, vote.choice()) == null) {
                 room.momentCounts.merge(vote.choice(), 1, Integer::sum);
+                persistRoom(room);
                 messaging.convertAndSend(topic(room, "moment"), momentView(room));
             }
         }
@@ -112,11 +259,11 @@ public class RoomEngine {
         return new RoomMoment(room.momentId, room.momentKind, room.momentPrompt, room.momentOptions,
                 Map.copyOf(room.momentCounts), room.momentClosesAt, System.currentTimeMillis() <= room.momentClosesAt);
     }
-    public void watch(String code) {
+    @SharedRoomOperation public void watch(String code) {
         Room room = requireRoom(code);
         synchronized (room) { publishRoster(room); broadcastState(room); }
     }
-    public void start(String code, String questionSetId, String requestedMode) {
+    @SharedRoomOperation public void start(String code, String questionSetId, String requestedMode) {
         Room room = requireRoom(code);
         synchronized (room) {
             startLocked(room, questionSetId, requestedMode, false);
@@ -134,7 +281,7 @@ public class RoomEngine {
     private AdminRoomView adminView(Room room) {
         synchronized (room) { return new AdminRoomView(room.code, room.mode, room.phase.name(), room.players.size(), MAX_PLAYERS, "/play/" + room.code + "?mode=" + room.mode); }
     }
-    public void submit(String code, String playerId, Answer answer) {
+    @SharedRoomOperation public void submit(String code, String playerId, Answer answer) {
         Room room = requireRoom(code); long received = System.currentTimeMillis();
         synchronized (room) {
             Player player = room.players.get(playerId);
@@ -154,7 +301,7 @@ public class RoomEngine {
             }
             long elapsed = Math.max(0, received - room.serverStart);
             boolean correct = room.current().correctOptionId().equals(canonicalOptionId);
-            int score = correct ? 500 + (int)Math.floor(500 * (1.0 - (double)elapsed / room.allowedMs)) : 0;
+            int score = AnswerScorer.score(correct, elapsed, room.allowedMs);
             Submission submission = new Submission(canonicalOptionId, correct, score, elapsed);
             if (player.submissions.putIfAbsent(room.questionIndex, submission) != null) {
                 sendPlayer(playerId, "answer-result", new SubmissionResult("DUPLICATE", 0, received-room.serverStart)); return;
@@ -170,7 +317,7 @@ public class RoomEngine {
             if (countSubmitted(room) == room.players.size()) reveal(room);
         }
     }
-    public Snapshot snapshot(String code, String playerId) {
+    @SharedRoomOperation public Snapshot snapshot(String code, String playerId) {
         Room room = requireRoom(code);
         synchronized (room) {
             Player player = room.players.get(playerId);
@@ -189,7 +336,7 @@ public class RoomEngine {
     private void intro(Room room) {
         room.phase = Phase.QUESTION_INTRO; room.transitionAt = System.currentTimeMillis() + INTRO_MS;
         for (Player player : room.players.values()) permuteForPlayer(room.current(), player);
-        broadcastState(room); room.task = clock.schedule(() -> { synchronized (room) { if (room.phase == Phase.QUESTION_INTRO) activate(room); } }, INTRO_MS, TimeUnit.MILLISECONDS);
+        broadcastState(room); scheduleTransition(room,INTRO_MS,Phase.QUESTION_INTRO,this::activate);
     }
     private void activate(Room room) {
         room.phase = Phase.QUESTION_ACTIVE; room.serverStart = System.currentTimeMillis();
@@ -208,7 +355,7 @@ public class RoomEngine {
                     shuffle, room.current().topic(), room.serverStart, room.endsAt, room.allowedMs, room.allowedMs,
                     room.current().imageUrl(), room.current().tableData()));
         }
-        room.task = clock.schedule(() -> { synchronized (room) { if (room.phase == Phase.QUESTION_ACTIVE) reveal(room); } }, room.allowedMs + JITTER_MS, TimeUnit.MILLISECONDS);
+        scheduleTransition(room,room.allowedMs+JITTER_MS,Phase.QUESTION_ACTIVE,this::reveal);
     }
     private List<Option> shuffled(Prompt prompt, Player player) {
         List<Option> options = new ArrayList<>(prompt.options());
@@ -237,28 +384,38 @@ public class RoomEngine {
                 "correctOptionId", room.current().correctOptionId(), "correctText", correctText,
                 "distribution", Map.copyOf(room.distribution), "standings", standings(room)));
         broadcastState(room);
-        room.task = clock.schedule(() -> { synchronized (room) { if (room.phase == Phase.QUESTION_REVEAL) leaderboard(room); } }, REVEAL_MS, TimeUnit.MILLISECONDS);
+        scheduleTransition(room,REVEAL_MS,Phase.QUESTION_REVEAL,this::leaderboard);
     }
     private void leaderboard(Room room) {
         room.phase = Phase.ROUND_LEADERBOARD; room.transitionAt = System.currentTimeMillis() + BOARD_MS;
         messaging.convertAndSend(topic(room, "leaderboard"), standings(room)); broadcastState(room);
-        room.task = clock.schedule(() -> { synchronized (room) {
-            if (room.phase != Phase.ROUND_LEADERBOARD) return;
-            if (++room.questionIndex >= room.prompts.size()) {
-                room.phase = Phase.FINAL_PODIUM; room.transitionAt = 0; persistMatch(room);
-                messaging.convertAndSend(topic(room, "results"), standings(room)); broadcastState(room);
-            } else intro(room);
-        } }, BOARD_MS, TimeUnit.MILLISECONDS);
+        scheduleTransition(room,BOARD_MS,Phase.ROUND_LEADERBOARD,this::advanceAfterLeaderboard);
+    }
+    private void advanceAfterLeaderboard(Room room) {
+        if (room.phase != Phase.ROUND_LEADERBOARD) return;
+        if (++room.questionIndex >= room.prompts.size()) {
+            int finalIndex=room.questionIndex;
+            long previousTransition=room.transitionAt;
+            room.phase = Phase.FINAL_PODIUM; room.transitionAt = 0;
+            try { persistMatch(room); }
+            catch(RuntimeException error) {
+                room.phase=Phase.ROUND_LEADERBOARD; room.questionIndex=finalIndex-1; room.transitionAt=previousTransition;
+                throw error;
+            }
+            messaging.convertAndSend(topic(room, "results"), standings(room)); broadcastState(room);
+        } else intro(room);
     }
     private void broadcastState(Room room) {
         Map<String,Object> state=Map.of("phase", room.phase, "questionIndex", room.questionIndex,
                 "remainingMs", Math.max(0, room.transitionAt-System.currentTimeMillis()), "mode", room.mode,
                 "hostManaged", room.hostManaged);
         messaging.convertAndSend(topic(room, "state"), state); cache.put("room:" + room.code + ":state", state);
+        persistRoom(room);
     }
     private void publishRoster(Room room) {
         List<PlayerView> roster=standings(room); messaging.convertAndSend(topic(room, "roster"), roster);
         cache.put("room:" + room.code + ":roster", roster);
+        persistRoom(room);
     }
     private List<PlayerView> standings(Room room) { List<Player> sorted = new ArrayList<>(room.players.values()); sorted.sort(Comparator.comparingInt((Player p)->p.score).reversed().thenComparing(p->p.identity.name())); List<PlayerView> views=new ArrayList<>(); for(int i=0;i<sorted.size();i++) { Player p=sorted.get(i); int answered=p.responseTimes.size(); long avg=answered==0?0:p.responseTimes.stream().mapToLong(Long::longValue).sum()/answered; int accuracyDenominator=room.phase==Phase.FINAL_PODIUM?room.prompts.size():answered; Map<String,TopicAnalytics> topics=new TreeMap<>(); p.topics.forEach((name,counter)->topics.put(name,counter.view())); views.add(new PlayerView(p.identity.playerId(),p.identity.name(),p.identity.college(),p.score,i+1,p.submissions.containsKey(room.questionIndex),accuracyDenominator==0?0:p.answersCorrect*100/accuracyDenominator,avg,topics)); } return views; }
     private PlayerView view(Room room, Player player) { return standings(room).stream().filter(v->v.playerId().equals(player.identity.playerId())).findFirst().orElseThrow(); }
@@ -270,11 +427,6 @@ public class RoomEngine {
         String winner = sorted.isEmpty() ? null : sorted.get(0).identity.playerId();
         Map<String,Long> pointsByCollege = new HashMap<>();
         room.players.values().forEach(p -> pointsByCollege.merge(p.identity.college(), (long)p.score, Long::sum));
-        pointsByCollege.forEach((name, points) -> {
-            College college = colleges.findByName(name).orElseGet(() -> new College(name, null));
-            college.addPoints(points); College saved = colleges.save(college);
-            matches.save(new MatchHistory(room.code, saved, winner));
-        });
         List<PlayerView> finalStandings = standings(room);
         Map<String,Integer> ranks = new HashMap<>();
         finalStandings.forEach(player -> ranks.put(player.playerId(), player.rank()));
@@ -292,7 +444,7 @@ public class RoomEngine {
                     player.score, ranks.get(player.identity.playerId()), player.answersCorrect, room.prompts.size(),
                     view.accuracyPercent(), view.averageSpeedMs(), view.topics(), answerRows);
         }).toList();
-        analytics.saveMatch(room.code, durableResults);
+        finalization.finalizeMatch(room.code,winner,pointsByCollege,durableResults);
     }
     private String topic(Room room, String event) { return "/topic/room/"+room.code+"/"+event; }
     private void sendPlayer(String playerId, String queue, Object payload) { messaging.convertAndSendToUser(playerId, "/queue/"+queue, payload); }
@@ -334,7 +486,7 @@ public class RoomEngine {
         List<Prompt> prompts=List.of(); String mode="CLASSIC", questionSetId; boolean hostManaged; int questionIndex; long serverStart, endsAt, allowedMs, transitionAt;
         String momentId, momentKind, momentPrompt; long momentClosesAt; List<String> momentOptions=List.of();
         final Map<String,Integer> momentCounts=new ConcurrentHashMap<>(); final Map<String,String> momentVotes=new ConcurrentHashMap<>(); ScheduledFuture<?> momentTask;
-        ScheduledFuture<?> task; final Map<String,Integer> distribution=new HashMap<>();
+        ScheduledFuture<?> task; Phase scheduledPhase; long scheduledAt; String momentScheduledId; final Map<String,Integer> distribution=new HashMap<>();
         Room(String code) { this.code=code; }
         Prompt current() { return prompts.get(questionIndex); }
     }

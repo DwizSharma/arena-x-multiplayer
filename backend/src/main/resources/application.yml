@@ -1,24 +1,32 @@
+
 spring:
   datasource:
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/arena_db}
-    username: ${DATABASE_USER:arena}
-    password: ${DATABASE_PASSWORD}
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/student_db}
+    username: ${DATABASE_USER:postgres}
+    password: ${DATABASE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
   jpa:
     hibernate:
       ddl-auto: update
     open-in-view: false
+
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+
 server:
   port: ${PORT:8080}
+
 arenax:
   admin:
     username: ${ARENA_ADMIN_USERNAME:}
     password: ${ARENA_ADMIN_PASSWORD:}
+
   web:
     allowed-origin-patterns: ${ALLOWED_ORIGIN_PATTERNS:http://localhost:3000}
+
 logging:
   level:
     com.arenax: INFO

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Service
@@ -30,9 +31,11 @@ public class PlayerAnalyticsService {
 
     @Transactional
     public void saveMatch(String roomCode, List<PlayerInput> players) {
+        String normalizedRoomCode = roomCode.toUpperCase(Locale.ROOT);
+        if (results.existsByRoomCode(normalizedRoomCode)) return;
         for (PlayerInput input : players) {
             try {
-                PlayerMatchResult result = results.save(new PlayerMatchResult(roomCode, input.playerId(), input.name(),
+                PlayerMatchResult result = results.save(new PlayerMatchResult(normalizedRoomCode, input.playerId(), input.name(),
                         input.college(), input.score(), input.rank(), input.correctCount(), input.totalQuestions(),
                         input.accuracyPercent(), input.averageResponseMs(), mapper.writeValueAsString(input.topics())));
                 List<PlayerQuestionAnswer> rows = input.answers().stream().map(answer -> new PlayerQuestionAnswer(result,
@@ -45,7 +48,7 @@ public class PlayerAnalyticsService {
 
     @Transactional(readOnly = true)
     public List<ResultView> getMatch(String roomCode) {
-        return results.findByRoomCodeOrderByRankAsc(roomCode.toUpperCase()).stream().map(result -> {
+        return results.findByRoomCodeOrderByRankAsc(roomCode.toUpperCase(Locale.ROOT)).stream().map(result -> {
             try {
                 Map<String,TopicAnalytics> topics = mapper.readValue(result.getTopicsJson(), new TypeReference<>() {});
                 List<AnswerView> answerViews = answers.findByResult_IdOrderByQuestionIndexAsc(result.getId()).stream()

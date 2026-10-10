@@ -12,14 +12,18 @@ import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import java.net.URI;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Value;
+import java.util.Arrays;
 
 @Configuration
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final SessionRegistry sessions;
     public WebSocketConfig(SessionRegistry sessions) { this.sessions = sessions; }
+    @Value("${arenax.web.allowed-origin-patterns:http://localhost:3000}") private String allowedOrigins;
     @Override public void configureMessageBroker(MessageBrokerRegistry config) {
-        config.enableSimpleBroker("/topic", "/queue"); config.setApplicationDestinationPrefixes("/app");
+        config.enableSimpleBroker("/topic", "/queue");
+        config.setApplicationDestinationPrefixes("/app");
         config.setUserDestinationPrefix("/user");
     }
     @Override public void configureClientInboundChannel(ChannelRegistration registration) {
@@ -53,6 +57,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
             }
             @Override public void afterHandshake(ServerHttpRequest request, ServerHttpResponse response,
                     org.springframework.web.socket.WebSocketHandler handler, Exception exception) {}
-        }).setAllowedOriginPatterns("*");
+        }).setAllowedOriginPatterns(Arrays.stream(allowedOrigins.split(",")).map(String::trim).filter(value -> !value.isEmpty()).toArray(String[]::new));
     }
 }

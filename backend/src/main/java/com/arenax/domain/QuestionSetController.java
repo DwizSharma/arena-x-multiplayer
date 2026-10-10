@@ -19,19 +19,23 @@ public class QuestionSetController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public CreatedQuestionSet create(@Valid @RequestBody CreateQuestionSet request) {
+    public CreatedQuestionSet create(@RequestHeader(value = "Authorization", required = false) String authorization,
+                                     @Valid @RequestBody CreateQuestionSet request) {
+        String owner = auth.requireAdmin(authorization);
         for (QuestionInput q : request.questions()) {
             if (q == null) throw new IllegalArgumentException("Question entries cannot be null");
             if (q.prompt() == null || q.prompt().isBlank()) throw new IllegalArgumentException("Question prompt is required");
             if (q.options() == null || q.options().size() < 2) throw new IllegalArgumentException("Each question needs at least two options");
             if (q.options().stream().anyMatch(o -> o == null || o.id() == null || o.id().isBlank() || o.text() == null || o.text().isBlank()))
                 throw new IllegalArgumentException("Every option needs an id and text");
-            if (q.options().size() > 8 || q.options().stream().map(o -> o.id()).distinct().count() != q.options().size())
-                throw new IllegalArgumentException("Options must have unique IDs and no more than eight choices");
+            if (q.options().size() > 6 || q.options().stream().map(o -> o.id().trim()).distinct().count() != q.options().size())
+                throw new IllegalArgumentException("Options must have unique IDs and no more than six choices");
+            if (q.options().stream().map(o -> o.text().trim().toLowerCase(java.util.Locale.ROOT)).distinct().count() != q.options().size())
+                throw new IllegalArgumentException("Duplicate options are not allowed");
             if (q.prompt().length() > 4000) throw new IllegalArgumentException("Question prompts are limited to 4000 characters");
             if (q.options().stream().noneMatch(o -> java.util.Objects.equals(o.id(), q.correctOptionId()))) throw new IllegalArgumentException("Correct option must match an option id");
         }
-        return new CreatedQuestionSet(service.create(request.title().trim(), request.hostId(), request.questions()));
+        return new CreatedQuestionSet(service.create(request.title().trim(), owner, request.questions()));
     }
     @GetMapping("/{id}") public QuestionSetService.QuestionSetView get(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String id) {
         auth.requireAdmin(authorization);

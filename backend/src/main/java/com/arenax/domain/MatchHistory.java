@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import java.time.Instant;
 
 @Entity
-@Table(name = "match_history")
+@Table(name = "match_history", indexes = @Index(name = "idx_match_history_room", columnList = "room_code"))
 public class MatchHistory {
     @Id @GeneratedValue(strategy = GenerationType.UUID) private String id;
     @Column(name = "room_code", nullable = false) private String roomCode;

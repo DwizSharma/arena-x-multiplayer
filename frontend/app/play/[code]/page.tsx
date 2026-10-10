@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState, type CSSProperties } from 'react';
 import { useParams } from 'next/navigation';
+import { API_BASE_URL } from '@/lib/api';
 import { useArenaSocket } from '@/lib/socket/useArenaSocket';
 import { QuestionCard } from '@/components/QuestionCard';
 import { LiveLeaderboard } from '@/components/LiveLeaderboard';
@@ -57,8 +58,7 @@ export default function PlayRoom() {
   async function join(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError('');
     try {
-      const api = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081';
-      const response = await fetch(`${api}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, college }) });
+      const response = await fetch(`${API_BASE_URL}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, college }) });
       if (!response.ok) throw new Error('Could not create player session. Check that the backend is running.');
       const player = await response.json();
       sessionStorage.setItem('playerId', player.playerId); sessionStorage.setItem('sessionToken', player.token); sessionStorage.setItem('roomCode', code);

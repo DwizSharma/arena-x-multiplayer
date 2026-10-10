@@ -38,7 +38,7 @@ export default function Home() {
   return <main className="app-shell home-shell">
     <header className="topbar home-topbar">
       <a className="brand" href="/" aria-label="ArenaX home">ARENA<i>X</i><span className="brand-dot">●</span></a>
-      <div className="home-nav"><span className="live-pill"><i /> LIVE PLAY</span><a href="#modes">Game modes</a></div>
+      <div className="home-nav"><span className="live-pill"><i /> LIVE PLAY</span><a href="#modes">Game modes</a><a href="/leagues">Leagues</a></div>
     </header>
 
     <section className="home-hero">

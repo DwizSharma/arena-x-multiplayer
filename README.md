@@ -16,29 +16,27 @@ ArenaX is a live, server-authoritative quiz arena for **Problem Statement 3: Apt
 - Host question-set library: create, edit, reorder, duplicate, archive, and restore sets
 - Match summaries and college points saved to PostgreSQL
 - Per-player match summaries and per-question answer analytics persisted to PostgreSQL
+- Active room state, player sessions, and admin sessions shared through Redis for restart recovery and replica coordination
+- STOMP events relayed through RabbitMQ, with Redis room locks and an HAProxy HTTP/WebSocket gateway for multiple replicas
+- Player and college league standings with weekly, monthly, and all-time periods
+- Authenticated host match analytics and CSV result export
 - 50-player WebSocket simulation script
 - Docker Compose deployment with health checks
 
 **Left**
-- Restore active rooms after a backend restart (rooms and sessions are in memory today)
-- Support more than one backend replica (in-process scheduler and room map)
-- Add player and college league standings with period filters
-- Add host match analytics and result export
 - Deploy to a public URL
 
 **Plan**
-- Use Redis snapshots to rebuild rooms on startup
-- Move room state and scheduling out of process so the backend can scale horizontally
-- Write answer analytics to PostgreSQL at the end of each match
 - Deploy the Compose stack to a cloud host and add the live URL below
 
 ## Architecture and why
-- **Backend:** Java 21 + Spring Boot. STOMP over WebSocket gives low-latency two-way messaging; the simple broker broadcasts room state, roster, reveals and standings, and user queues carry each player's shuffled question and answer acknowledgement.
+- **Backend:** Java 21 + Spring Boot. STOMP over WebSocket gives low-latency two-way messaging; RabbitMQ relays room state, roster, reveals, standings, and player queues across backend replicas.
 - **Server-authoritative game engine:** the server owns the clock and ignores client timestamps. Answers go through an atomic `putIfAbsent`, so only the first answer per player per question counts. A 250 ms grace period absorbs network delay without extending the scored window. This keeps scoring fair.
 - **Per-player option shuffle:** each player sees options in a deterministic player-specific order, mapped back to canonical IDs on the server. Public messages never contain the correct answer.
 - **Session tokens:** `POST /api/session` issues a token that is validated at WebSocket handshake and bound to the connection.
 - **PostgreSQL:** question sets, colleges, match history and college points (durable data).
-- **Redis:** expiring JSON snapshots of room state; the in-memory room stays authoritative.
+- **Redis:** shared 24-hour room/player/admin session snapshots, distributed room locks, and phase reconciliation coordinate backend replicas and recover state after a restart. Core state writes fail the request if Redis is unavailable.
+- **HAProxy:** Compose routes HTTP and WebSocket traffic across healthy backend replicas.
 - **Frontend:** Next.js (App Router) + Tailwind, with a STOMP client hook that reconnects and requests a snapshot.
 - **Room flow:** `LOBBY -> QUESTION_INTRO (3 s) -> QUESTION_ACTIVE (20-45 s) -> QUESTION_REVEAL (5 s) -> ROUND_LEADERBOARD (5 s) -> podium`. The question ends early if every player has answered.
 - **Modes:** the host can choose Classic, Meme Rush, Quant Sprint, or Logic Lab; the server selects its built-in question set and includes the mode in reconnect snapshots.
@@ -58,21 +56,23 @@ Requires Docker with the Compose plugin. Configure an admin username/password an
 ```bash
 git clone https://github.com/DwizSharma/arena-x-multiplayer.git
 cd arena-x-multiplayer
-cp .env.example .env        # replace the example admin and database passwords
+cp .env.example .env        # replace the example database and admin passwords
 docker compose up --build
 ```
 
 Open http://localhost:3000 and choose **Faculty host**. Sign in with `ARENA_ADMIN_USERNAME` and `ARENA_ADMIN_PASSWORD`, create a private room, then share the generated code or invite link. Start once students have joined. Students only need a display name and college name. Open `/projector/<ROOM_CODE>` for the big-screen view.
 
-Admin credentials are configured by `ARENA_ADMIN_USERNAME` and `ARENA_ADMIN_PASSWORD`; admin sessions expire after eight hours. Never use the sample `.env.example` password values for a public deployment. Private room codes are randomly generated and active room state is currently kept in backend memory.
+Admin credentials are configured by `ARENA_ADMIN_USERNAME` and `ARENA_ADMIN_PASSWORD`; admin sessions expire after eight hours. Never use the sample `.env.example` password values for a public deployment. Private room codes are randomly generated. Room state is held in memory for fast gameplay and shared through 24-hour Redis snapshots; Redis must remain available during a match.
 
-Run services locally instead (Java 21, Maven, Node 20+):
+Run services locally instead (Java 21, Maven, PostgreSQL, Redis, Node 20+):
 
 ```bash
 docker compose up -d postgres redis
 set -a; source .env; set +a
 cd backend && mvn spring-boot:run          # terminal 1 (from the repository root)
 set -a; source .env; set +a
+export NEXT_PUBLIC_API_URL=http://localhost:8080
+export NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws-arena
 cd frontend && npm install && npm run dev  # terminal 2 (also from the repository root)
 ```
 
@@ -86,7 +86,9 @@ Manage reusable question sets from **Question sets** in the faculty host console
 
 Completed match results are stored per player with topic summaries and one answer record per question (including unanswered questions). Retrieve a match's saved results from `GET /api/matches/{roomCode}/results`.
 
-Run a single backend instance only; active matches are cleared on restart.
+League standings are available from `GET /api/leagues?period=WEEKLY|MONTHLY|ALL_TIME`. Scores are summed across completed player results in the selected rolling window; college totals sum their players' scores. Player standings are keyed by the generated player session ID, so they do not yet represent a permanent student identity. Hosts can retrieve `GET /api/admin/matches/{roomCode}/analytics` and download `GET /api/admin/matches/{roomCode}/export.csv` with their admin bearer token. The legacy `POST /api/question-sets` endpoint also requires an admin token.
+
+Compose starts the API gateway, Redis and PostgreSQL. To run multiple backend replicas, use `docker compose up --build --scale backend=3`; the HAProxy gateway distributes HTTP and WebSocket connections across them. Room and session snapshots expire after 24 hours, and Redis must remain available while matches are running.
 
 Live URL: TODO (add once deployed)
 
@@ -98,7 +100,7 @@ Live URL: TODO (add once deployed)
 - **Port already in use (3000, 8081, 5432, 6379):** stop the other service using it.
 
 ## Tools and AI used
-- Java 21, Spring Boot, Spring Data JPA, STOMP/WebSocket, PostgreSQL 16, Redis 7
+- Java 21, Spring Boot, Spring Data JPA, STOMP/WebSocket with Spring simple broker, PostgreSQL 16, Redis 7
 - Next.js, React, Tailwind CSS, framer-motion, @stomp/stompjs
 - Docker / Docker Compose
 - AI coding tools: OpenAI Codex was used as a coding assistant during implementation and documentation. Players do not interact with AI; questions and scoring are deterministic.
