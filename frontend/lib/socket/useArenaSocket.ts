@@ -2,9 +2,9 @@
 import { Client, IMessage, ReconnectionTimeMode, StompSubscription } from '@stomp/stompjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-export type ArenaState = { connected: boolean; phase: string; question: any; roster: any[]; progress: any; reveal: any; leaderboard: any[]; result: any[]; snapshot: any; answerResult: any; error: string | null };
+export type ArenaState = { connected: boolean; phase: string; question: any; roster: any[]; progress: any; reveal: any; leaderboard: any[]; result: any[]; snapshot: any; answerResult: any; moment: any; error: string | null };
 export function useArenaSocket(roomCode: string, anonymousView = false) {
-  const [state, setState] = useState<ArenaState>({ connected: false, phase: 'LOBBY', question: null, roster: [], progress: null, reveal: null, leaderboard: [], result: [], snapshot: null, answerResult: null, error: null });
+  const [state, setState] = useState<ArenaState>({ connected: false, phase: 'LOBBY', question: null, roster: [], progress: null, reveal: null, leaderboard: [], result: [], snapshot: null, answerResult: null, moment: null, error: null });
   const clientRef = useRef<Client | null>(null);
   const callbacks = useRef<{ [key: string]: StompSubscription }>({});
   const room = roomCode.toUpperCase();
@@ -24,12 +24,12 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
     let credentials = readCredentials();
     if (!credentials && anonymousView) {
       try {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `Projector_${room}`, college: 'ArenaX Projector' }) });
+        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8081'}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `Projector_${room}`, college: 'ArenaX Projector' }) });
         if (response.ok) credentials = await response.json();
       } catch { setState(s => ({ ...s, error: 'Unable to connect to the ArenaX server' })); }
     }
     if (!credentials || cancelled) return;
-    const base = process.env.NEXT_PUBLIC_WS_URL || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws-arena';
+    const base = process.env.NEXT_PUBLIC_WS_URL || (location.protocol === 'https:' ? 'wss://localhost:8081/ws-arena' : 'ws://localhost:8081/ws-arena');
     const url = new URL(base); url.searchParams.set('playerId', credentials.playerId); url.searchParams.set('token', credentials.token);
     const client = new Client({ brokerURL: url.toString(), reconnectDelay: 500, maxReconnectDelay: 15000,
       reconnectTimeMode: ReconnectionTimeMode.EXPONENTIAL,
@@ -54,6 +54,7 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
         subscribe('reconnect', `/user/queue/reconnect-state`, 'snapshot');
         subscribe('answer-result', `/user/queue/answer-result`, 'answerResult');
         subscribe('reveal', `/topic/room/${room}/reveal`, 'reveal');
+        subscribe('moment', `/topic/room/${room}/moment`, 'moment');
         subscribe('leaderboard', `/topic/room/${room}/leaderboard`, 'leaderboard');
         subscribe('result', `/topic/room/${room}/results`, 'result');
         if (anonymousView) publish(`/app/room/${room}/watch`);
@@ -72,6 +73,6 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
     void boot();
     return () => { cancelled = true; Object.values(callbacks.current).forEach(sub => sub.unsubscribe()); callbacks.current = {}; if (activeClient) void activeClient.deactivate(); if (clientRef.current === activeClient) clientRef.current = null; };
   }, [room, readCredentials, publish, anonymousView]);
-  const actions = useMemo(() => ({ start: (questionSetId?: string, mode = 'CLASSIC') => publish(`/app/room/${room}/start`, { ...(questionSetId ? { questionSetId } : {}), mode }), answer: (questionId: string, optionId: string) => publish(`/app/room/${room}/answer`, { questionId, optionId }) }), [publish, room]);
+  const actions = useMemo(() => ({ start: (questionSetId?: string, mode = 'CLASSIC') => publish(`/app/room/${room}/start`, { ...(questionSetId ? { questionSetId } : {}), mode }), answer: (questionId: string, optionId: string) => publish(`/app/room/${room}/answer`, { questionId, optionId }), voteMoment: (momentId: string, choice: string) => publish(`/app/room/${room}/moment-vote`, { momentId, choice }) }), [publish, room]);
   return { ...state, ...actions };
 }

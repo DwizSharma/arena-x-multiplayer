@@ -14,9 +14,13 @@ public final class GameTypes {
     public record TopicAnalytics(int answered, int correct, double accuracyPercent, long averageSpeedMs) {}
     public record PlayerView(String playerId, String name, String college, int score, int rank, boolean submitted,
                              int accuracyPercent, long averageSpeedMs, Map<String,TopicAnalytics> topics) {}
-    public record Snapshot(String roomCode, Phase phase, String mode, int questionIndex, long remainingMs,
+    public record Snapshot(String roomCode, Phase phase, String mode, boolean hostManaged, int questionIndex, long remainingMs,
                            List<Option> options, PublicQuestion currentQuestion, boolean submitted,
                            int score, int rank, List<PlayerView> players) {}
+    public record AdminRoomView(String code, String mode, String phase, int playerCount, int capacity, String joinPath) {}
+    public record RoomMoment(String momentId, String kind, String prompt, List<String> options,
+                             Map<String, Integer> counts, long closesAt, boolean active) {}
+    public record MomentVote(String momentId, String choice) {}
     public record Answer(String questionId, String optionId, Long clientTimestamp) {}
     public record SubmissionResult(String status, int score, long serverElapsedMs) {}
 }

@@ -8,6 +8,8 @@ ArenaX is a live, server-authoritative quiz arena for **Problem Statement 3: Apt
 ## Done / Left / Plan
 **Done**
 - Join flow (name + college), lobby, timed questions, reveal, round leaderboard, final podium
+- Admin sign-in with environment-configured credentials and expiring admin sessions
+- Host-managed private rooms with high-entropy join codes and an admin-only start control
 - Four server-selected modes: Classic, Meme Rush, Quant Sprint, and Logic Lab
 - Server-side clock, first-answer-wins scoring, reconnect snapshots
 - Projector view and custom question sets stored in PostgreSQL
@@ -45,26 +47,30 @@ ArenaX is a live, server-authoritative quiz arena for **Problem Statement 3: Apt
 - 50-player load simulation (`simulation/`)
 - Docker Compose deployment with health checks
 - Four focused match modes, shareable room invites, a live lobby roster, and playful reaction copy
+- Score-free live Hype Check, Meme Break, and Brain Break polls between rounds
 
 ## How to run it
-Requires Docker with the Compose plugin. No login is needed: open the app, enter a name and college, and join room `APT892`.
+Requires Docker with the Compose plugin. Configure an admin username/password and database password in `.env`; student sessions are created when students join.
 
 ```bash
 git clone https://github.com/DwizSharma/arena-x-multiplayer.git
 cd arena-x-multiplayer
-cp .env.example .env        # then set DATABASE_PASSWORD in .env
+cp .env.example .env        # replace the example admin and database passwords
 docker compose up --build
 ```
 
-Open http://localhost:3000, join room `APT892`, and press **Start match** from a connected player. Open extra browser tabs or incognito windows to act as more players, and `/projector/APT892` for the big-screen view.
+Open http://localhost:3000 and choose **Faculty host**. Sign in with `ARENA_ADMIN_USERNAME` and `ARENA_ADMIN_PASSWORD`, create a private room, then share the generated code or invite link. Start once students have joined. Students only need a display name and college name. Open `/projector/<ROOM_CODE>` for the big-screen view.
+
+Admin credentials are configured by `ARENA_ADMIN_USERNAME` and `ARENA_ADMIN_PASSWORD`; admin sessions expire after eight hours. Never use the sample `.env.example` password values for a public deployment. Private room codes are randomly generated and active room state is currently kept in backend memory.
 
 Run services locally instead (Java 21, Maven, Node 20+):
 
 ```bash
 docker compose up -d postgres redis
 set -a; source .env; set +a
-cd backend && mvn spring-boot:run          # terminal 1
-cd frontend && npm install && npm run dev  # terminal 2
+cd backend && mvn spring-boot:run          # terminal 1 (from the repository root)
+set -a; source .env; set +a
+cd frontend && npm install && npm run dev  # terminal 2 (also from the repository root)
 ```
 
 50-player simulation (backend running, room not yet started):
@@ -84,7 +90,7 @@ Live URL: TODO (add once deployed)
 - **Changed the password after the first run:** Postgres keeps the old one in its volume. Reset with `docker compose down -v`.
 - **`failed to resolve reference` / DNS timeouts when pulling images:** set a reliable DNS server (for example 8.8.8.8 and 1.1.1.1) for the host or in `/etc/docker/daemon.json`, restart Docker, and re-run.
 - **`buildx isn't installed` warning:** harmless. Install `docker-buildx` or run with `COMPOSE_BAKE=false`.
-- **Port already in use (3000, 8080, 5432, 6379):** stop the other service using it.
+- **Port already in use (3000, 8081, 5432, 6379):** stop the other service using it.
 
 ## Tools and AI used
 - Java 21, Spring Boot, Spring Data JPA, STOMP/WebSocket, PostgreSQL 16, Redis 7

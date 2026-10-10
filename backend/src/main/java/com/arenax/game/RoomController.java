@@ -28,6 +28,10 @@ public class RoomController {
     public void answer(@DestinationVariable String code, @Payload Answer answer, SimpMessageHeaderAccessor headers) {
         engine.submit(code, identity(headers).playerId(), answer);
     }
+    @MessageMapping("/room/{code}/moment-vote")
+    public void momentVote(@DestinationVariable String code, @Payload GameTypes.MomentVote vote, SimpMessageHeaderAccessor headers) {
+        engine.voteMoment(code, identity(headers).playerId(), vote);
+    }
     @MessageMapping("/room/{code}/reconnect")
     public void reconnect(@DestinationVariable String code, SimpMessageHeaderAccessor headers) {
         SessionRegistry.Identity identity=identity(headers);

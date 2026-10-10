@@ -7,8 +7,8 @@ FROM node:20-alpine AS build
 WORKDIR /app
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-ARG NEXT_PUBLIC_API_URL=http://localhost:8080
-ARG NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws-arena
+ARG NEXT_PUBLIC_API_URL=http://localhost:8081
+ARG NEXT_PUBLIC_WS_URL=ws://localhost:8081/ws-arena
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 RUN npm run build
 

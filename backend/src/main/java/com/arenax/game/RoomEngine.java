@@ -11,6 +11,7 @@ import java.util.concurrent.*;
 @Component
 public class RoomEngine {
     private static final int MAX_PLAYERS = 50;
+    private static final char[] ROOM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
     private static final long INTRO_MS = 3_000, REVEAL_MS = 5_000, BOARD_MS = 5_000, JITTER_MS = 250;
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
     private final ScheduledExecutorService clock = Executors.newScheduledThreadPool(2, r -> {
@@ -21,6 +22,7 @@ public class RoomEngine {
     private final MatchHistoryRepository matches;
     private final QuestionSetService questionSets;
     private final RoomSnapshotCache cache;
+    private final java.security.SecureRandom secureRandom = new java.security.SecureRandom();
     public RoomEngine(SimpMessagingTemplate messaging, CollegeRepository colleges, MatchHistoryRepository matches,
                       QuestionSetService questionSets, RoomSnapshotCache cache) {
         this.messaging = messaging; this.colleges = colleges; this.matches = matches; this.questionSets=questionSets; this.cache=cache;
@@ -38,6 +40,77 @@ public class RoomEngine {
             publishRoster(room); return view(room, player);
         }
     }
+    public AdminRoomView createPrivateRoom(String mode, String questionSetId) {
+        for (int attempt = 0; attempt < 12; attempt++) {
+            StringBuilder code = new StringBuilder();
+            for (int i = 0; i < 10; i++) code.append(ROOM_CODE_CHARS[secureRandom.nextInt(ROOM_CODE_CHARS.length)]);
+            Room room = new Room(code.toString());
+            room.hostManaged = true;
+            room.mode = normalizeMode(mode);
+            room.questionSetId = questionSetId == null || questionSetId.isBlank() ? null : questionSetId.trim();
+            if (rooms.putIfAbsent(room.code, room) == null) return adminView(room);
+        }
+        throw new IllegalStateException("Could not allocate a room code. Try again.");
+    }
+    public AdminRoomView adminRoom(String code) { return adminView(requireRoom(code)); }
+    public AdminRoomView startPrivateRoom(String code) {
+        Room room = requireRoom(code);
+        synchronized (room) {
+            if (!room.hostManaged) throw new IllegalArgumentException("This room is not host-managed");
+            startLocked(room, room.questionSetId, room.mode, true);
+            return adminView(room);
+        }
+    }
+    public RoomMoment launchMoment(String code, String requestedKind) {
+        Room room = requireRoom(code);
+        synchronized (room) {
+            if (room.phase == Phase.LOBBY || room.phase == Phase.FINAL_PODIUM)
+                throw new IllegalStateException("Fun moments are available while a match is underway");
+            String kind = requestedKind == null ? "HYPE_CHECK" : requestedKind.trim().toUpperCase(Locale.ROOT);
+            String prompt;
+            List<String> options;
+            switch (kind) {
+                case "MEME_BREAK" -> { prompt = "Meme break: choose the placement-prep mood."; options = List.of("Locked in 🔒", "Need a snack 🍿", "Send help 🫠"); }
+                case "BRAIN_BREAK" -> { prompt = "Quick reset: what should the squad do after this round?"; options = List.of("Stretch break 🧘", "One more round 🎮", "Victory snack 🍕"); }
+                case "HYPE_CHECK" -> { prompt = "Hype check: how is the room feeling?"; options = List.of("We are cooking 🔥", "Steady focus 🎯", "Plot twist incoming 👀"); }
+                default -> throw new IllegalArgumentException("Choose a supported fun moment");
+            }
+            if (room.momentTask != null) room.momentTask.cancel(false);
+            room.momentId = UUID.randomUUID().toString(); room.momentKind = kind; room.momentPrompt = prompt;
+            room.momentOptions = options; room.momentCounts.clear(); room.momentVotes.clear();
+            options.forEach(option -> room.momentCounts.put(option, 0));
+            room.momentClosesAt = System.currentTimeMillis() + 12_000;
+            RoomMoment moment = momentView(room);
+            messaging.convertAndSend(topic(room, "moment"), moment);
+            String activeMoment = room.momentId;
+            room.momentTask = clock.schedule(() -> {
+                synchronized (room) {
+                    if (activeMoment.equals(room.momentId)) {
+                        messaging.convertAndSend(topic(room, "moment"), new RoomMoment(room.momentId, room.momentKind,
+                                room.momentPrompt, room.momentOptions, Map.copyOf(room.momentCounts), room.momentClosesAt, false));
+                        room.momentId = null;
+                    }
+                }
+            }, 12_000, TimeUnit.MILLISECONDS);
+            return moment;
+        }
+    }
+    public void voteMoment(String code, String playerId, MomentVote vote) {
+        Room room = requireRoom(code);
+        synchronized (room) {
+            if (vote == null || vote.choice() == null || room.momentId == null || !room.momentId.equals(vote.momentId())
+                    || System.currentTimeMillis() > room.momentClosesAt) return;
+            if (!room.players.containsKey(playerId) || !room.momentCounts.containsKey(vote.choice())) return;
+            if (room.momentVotes.putIfAbsent(playerId, vote.choice()) == null) {
+                room.momentCounts.merge(vote.choice(), 1, Integer::sum);
+                messaging.convertAndSend(topic(room, "moment"), momentView(room));
+            }
+        }
+    }
+    private RoomMoment momentView(Room room) {
+        return new RoomMoment(room.momentId, room.momentKind, room.momentPrompt, room.momentOptions,
+                Map.copyOf(room.momentCounts), room.momentClosesAt, System.currentTimeMillis() <= room.momentClosesAt);
+    }
     public void watch(String code) {
         Room room = requireRoom(code);
         synchronized (room) { publishRoster(room); broadcastState(room); }
@@ -45,12 +118,20 @@ public class RoomEngine {
     public void start(String code, String questionSetId, String requestedMode) {
         Room room = requireRoom(code);
         synchronized (room) {
-            if (room.players.isEmpty()) throw new IllegalStateException("Cannot start an empty room");
-            if (room.phase != Phase.LOBBY) throw new IllegalStateException("Room has already started");
-            room.mode = normalizeMode(requestedMode);
-            room.prompts = questionSetId == null || questionSetId.isBlank() ? samplePrompts(room.mode) : questionSets.loadPrompts(questionSetId);
-            room.questionIndex = 0; intro(room);
+            startLocked(room, questionSetId, requestedMode, false);
         }
+    }
+    private void startLocked(Room room, String questionSetId, String requestedMode, boolean adminStart) {
+        if (room.hostManaged && !adminStart) throw new IllegalStateException("The room host controls when this match starts");
+        if (room.players.isEmpty()) throw new IllegalStateException("At least one student must join before starting");
+        if (room.phase != Phase.LOBBY) throw new IllegalStateException("Room has already started");
+        room.mode = normalizeMode(requestedMode);
+        String effectiveSet = questionSetId == null || questionSetId.isBlank() ? room.questionSetId : questionSetId;
+        room.prompts = effectiveSet == null || effectiveSet.isBlank() ? samplePrompts(room.mode) : questionSets.loadPrompts(effectiveSet);
+        room.questionIndex = 0; intro(room);
+    }
+    private AdminRoomView adminView(Room room) {
+        synchronized (room) { return new AdminRoomView(room.code, room.mode, room.phase.name(), room.players.size(), MAX_PLAYERS, "/play/" + room.code + "?mode=" + room.mode); }
     }
     public void submit(String code, String playerId, Answer answer) {
         Room room = requireRoom(code); long received = System.currentTimeMillis();
@@ -95,7 +176,7 @@ public class RoomEngine {
                     room.current().id(), room.current().prompt(), options, room.current().topic(), room.serverStart,
                     room.endsAt, room.allowedMs, Math.max(0, room.endsAt-System.currentTimeMillis()),
                     room.current().imageUrl(), room.current().tableData()) : null;
-            return new Snapshot(room.code, room.phase, room.mode, room.questionIndex,
+            return new Snapshot(room.code, room.phase, room.mode, room.hostManaged, room.questionIndex,
                     end == 0 ? 0 : Math.max(0, end - System.currentTimeMillis()), options, currentQuestion,
                     player.submissions.containsKey(room.questionIndex), player.score, rank(room, player), standings(room));
         }
@@ -166,7 +247,8 @@ public class RoomEngine {
     }
     private void broadcastState(Room room) {
         Map<String,Object> state=Map.of("phase", room.phase, "questionIndex", room.questionIndex,
-                "remainingMs", Math.max(0, room.transitionAt-System.currentTimeMillis()), "mode", room.mode);
+                "remainingMs", Math.max(0, room.transitionAt-System.currentTimeMillis()), "mode", room.mode,
+                "hostManaged", room.hostManaged);
         messaging.convertAndSend(topic(room, "state"), state); cache.put("room:" + room.code + ":state", state);
     }
     private void publishRoster(Room room) {
@@ -226,7 +308,9 @@ public class RoomEngine {
 
     private static final class Room {
         final String code; final Map<String,Player> players=new ConcurrentHashMap<>(); Phase phase=Phase.LOBBY;
-        List<Prompt> prompts=List.of(); String mode="CLASSIC"; int questionIndex; long serverStart, endsAt, allowedMs, transitionAt;
+        List<Prompt> prompts=List.of(); String mode="CLASSIC", questionSetId; boolean hostManaged; int questionIndex; long serverStart, endsAt, allowedMs, transitionAt;
+        String momentId, momentKind, momentPrompt; long momentClosesAt; List<String> momentOptions=List.of();
+        final Map<String,Integer> momentCounts=new ConcurrentHashMap<>(); final Map<String,String> momentVotes=new ConcurrentHashMap<>(); ScheduledFuture<?> momentTask;
         ScheduledFuture<?> task; final Map<String,Integer> distribution=new HashMap<>();
         Room(String code) { this.code=code; }
         Prompt current() { return prompts.get(questionIndex); }

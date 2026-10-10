@@ -1,0 +1,19 @@
+package com.arenax;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+@Configuration
+public class HttpCorsConfig implements WebMvcConfigurer {
+    @Value("${arenax.web.allowed-origin-patterns:http://localhost:3000}") private String allowedOrigins;
+
+    @Override public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/api/**")
+                .allowedOriginPatterns(allowedOrigins.split(","))
+                .allowedMethods("GET", "POST", "OPTIONS")
+                .allowedHeaders("Authorization", "Content-Type")
+                .maxAge(3600);
+    }
+}

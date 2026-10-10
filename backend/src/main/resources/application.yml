@@ -13,6 +13,12 @@ spring:
       port: ${REDIS_PORT:6379}
 server:
   port: ${PORT:8080}
+arenax:
+  admin:
+    username: ${ARENA_ADMIN_USERNAME:}
+    password: ${ARENA_ADMIN_PASSWORD:}
+  web:
+    allowed-origin-patterns: ${ALLOWED_ORIGIN_PATTERNS:http://localhost:3000}
 logging:
   level:
     com.arenax: INFO
