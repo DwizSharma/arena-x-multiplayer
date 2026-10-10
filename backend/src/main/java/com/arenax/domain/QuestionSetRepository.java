@@ -1,3 +1,7 @@
 package com.arenax.domain;
 import org.springframework.data.jpa.repository.JpaRepository;
-public interface QuestionSetRepository extends JpaRepository<QuestionSet, String> {}
+import org.springframework.data.jpa.repository.EntityGraph;
+import java.util.Optional;
+public interface QuestionSetRepository extends JpaRepository<QuestionSet, String> {
+    @EntityGraph(attributePaths = "questions") Optional<QuestionSet> findWithQuestionsById(String id);
+}

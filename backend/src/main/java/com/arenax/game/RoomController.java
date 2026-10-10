@@ -10,6 +10,7 @@ import org.springframework.stereotype.Controller;
 @Controller
 public class RoomController {
     public record RoomRequest(String roomCode) {}
+    public record StartRequest(String questionSetId) {}
     private final RoomEngine engine;
     private final SimpMessagingTemplate messaging;
     public RoomController(RoomEngine engine, SimpMessagingTemplate messaging) { this.engine=engine; this.messaging=messaging; }
@@ -20,8 +21,8 @@ public class RoomController {
         messaging.convertAndSendToUser(identity.playerId(), "/queue/joined", engine.snapshot(code, identity.playerId()));
     }
     @MessageMapping("/room/{code}/start")
-    public void start(@DestinationVariable String code, SimpMessageHeaderAccessor headers) {
-        identity(headers); engine.start(code);
+    public void start(@DestinationVariable String code, @Payload(required = false) StartRequest request, SimpMessageHeaderAccessor headers) {
+        identity(headers); engine.start(code, request == null ? null : request.questionSetId());
     }
     @MessageMapping("/room/{code}/answer")
     public void answer(@DestinationVariable String code, @Payload Answer answer, SimpMessageHeaderAccessor headers) {

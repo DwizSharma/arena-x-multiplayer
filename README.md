@@ -89,7 +89,29 @@ The script creates 50 sessions, connects concurrent STOMP clients, joins them as
 
 ## Current deployment scope
 
-The engine runs a bundled three-question demonstration set. Active rooms, issued sessions, option maps, and detailed player answer analytics stay in backend memory; completed match summaries and college points are written to PostgreSQL. Question set and question entities are defined, but the demo engine does not yet load custom question sets. Restarting the backend clears active rooms and player tokens, and the detailed per-player analytics are not durable. Redis is provisioned for future shared room/session state; this version uses an in-process scheduler and room map, so run a single backend replica.
+The engine runs either a bundled three-question set or a question set loaded from PostgreSQL. Completed match summaries and college points are written to PostgreSQL. Active rooms, issued sessions, option maps, and detailed player answer analytics stay in backend memory; Redis holds expiring JSON snapshots but is not used to restore rooms after restart. Player tokens and active matches are therefore cleared by a backend restart. This version uses an in-process scheduler and room map, so run a single backend replica.
+
+### Custom question sets
+
+Create a question set through `POST /api/question-sets`; questions need at least two options, and `correctOptionId` must match one option ID. The response contains the generated ID. Fetch its persisted definition with `GET /api/question-sets/{id}`; that response deliberately omits correct answers. To play it, send `{ "questionSetId": "<id>" }` as the body of STOMP `/app/room/{code}/start`; omitting the ID starts the bundled demo set. Custom prompts, options, image URLs, and table data are loaded from PostgreSQL for the match. Redis stores expiring JSON snapshots for room state, roster, and the current scrubbed question; the in-memory room remains authoritative.
+
+Example request:
+
+```json
+{
+  "title": "Quant warmup",
+  "hostId": "instructor-1",
+  "questions": [{
+    "prompt": "What is 6 × 7?",
+    "options": [{"id":"A","text":"36"},{"id":"B","text":"42"}],
+    "correctOptionId": "B",
+    "topic": "Quant",
+    "difficulty": "easy"
+  }]
+}
+```
+
+After the create request returns an ID, connect an authenticated player to the room and publish the STOMP start message to `/app/room/APT892/start` with body `{"questionSetId":"<id>"}`.
 
 ## Public GitHub remote
 
