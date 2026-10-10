@@ -1,0 +1,15 @@
+# Java & Spring Boot
+backend/target/
+backend/.mvn/wrapper/
+backend/*.jar
+
+# Node & Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Environments & Logs
+*.env
+*.env.local
+*.log
+.DS_Store
