@@ -1,10 +1,10 @@
 'use client';
-import { Client, IMessage, StompSubscription } from '@stomp/stompjs';
+import { Client, IMessage, ReconnectionTimeMode, StompSubscription } from '@stomp/stompjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-export type ArenaState = { connected: boolean; phase: string; question: any; roster: any[]; reveal: any; leaderboard: any[]; result: any[]; snapshot: any; answerResult: any; error: string | null };
+export type ArenaState = { connected: boolean; phase: string; question: any; roster: any[]; progress: any; reveal: any; leaderboard: any[]; result: any[]; snapshot: any; answerResult: any; error: string | null };
 export function useArenaSocket(roomCode: string, anonymousView = false) {
-  const [state, setState] = useState<ArenaState>({ connected: false, phase: 'LOBBY', question: null, roster: [], reveal: null, leaderboard: [], result: [], snapshot: null, answerResult: null, error: null });
+  const [state, setState] = useState<ArenaState>({ connected: false, phase: 'LOBBY', question: null, roster: [], progress: null, reveal: null, leaderboard: [], result: [], snapshot: null, answerResult: null, error: null });
   const clientRef = useRef<Client | null>(null);
   const callbacks = useRef<{ [key: string]: StompSubscription }>({});
   const room = roomCode.toUpperCase();
@@ -32,6 +32,7 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
     const base = process.env.NEXT_PUBLIC_WS_URL || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws-arena';
     const url = new URL(base); url.searchParams.set('playerId', credentials.playerId); url.searchParams.set('token', credentials.token);
     const client = new Client({ brokerURL: url.toString(), reconnectDelay: 500, maxReconnectDelay: 15000,
+      reconnectTimeMode: ReconnectionTimeMode.EXPONENTIAL,
       heartbeatIncoming: 10000, heartbeatOutgoing: 10000, connectionTimeout: 10000,
       onConnect: () => {
         setState(s => ({ ...s, connected: true, error: null }));
@@ -44,8 +45,9 @@ export function useArenaSocket(roomCode: string, anonymousView = false) {
         };
         subscribe('state', `/topic/room/${room}/state`, 'snapshot');
         subscribe('roster', `/topic/room/${room}/roster`, 'roster');
+        subscribe('progress', `/topic/room/${room}/progress`, 'progress');
         subscribe('question', `/user/queue/question`, 'question');
-        subscribe('public-question', `/topic/room/${room}/question`, 'question');
+        if (anonymousView) subscribe('public-question', `/topic/room/${room}/question`, 'question');
         subscribe('joined', `/user/queue/joined`, 'snapshot');
         subscribe('reconnect', `/user/queue/reconnect-state`, 'snapshot');
         subscribe('answer-result', `/user/queue/answer-result`, 'answerResult');

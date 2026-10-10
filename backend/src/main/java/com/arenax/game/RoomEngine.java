@@ -77,7 +77,9 @@ public class RoomEngine {
             player.topics.computeIfAbsent(topic, ignored -> new TopicCounter()).add(correct, elapsed);
             room.distribution.merge(player.optionMapping.get(answer.optionId()), 1, Integer::sum);
             sendPlayer(playerId, "answer-result", new SubmissionResult("ACCEPTED", score, elapsed));
-            messaging.convertAndSend(topic(room, "progress"), Map.of("submitted", countSubmitted(room), "total", room.players.size()));
+            publishRoster(room);
+            messaging.convertAndSend(topic(room, "progress"), Map.of("submitted", countSubmitted(room), "total", room.players.size(),
+                    "distribution", Map.copyOf(room.distribution)));
             if (countSubmitted(room) == room.players.size()) reveal(room);
         }
     }
@@ -106,7 +108,8 @@ public class RoomEngine {
         room.phase = Phase.QUESTION_ACTIVE; room.serverStart = System.currentTimeMillis();
         room.allowedMs = Math.max(20, Math.min(45, room.current().durationSeconds())) * 1000L;
         room.endsAt = room.serverStart + room.allowedMs; room.transitionAt = room.endsAt;
-        room.distribution.clear(); broadcastState(room);
+        room.distribution.clear(); publishRoster(room); broadcastState(room);
+        messaging.convertAndSend(topic(room, "progress"), Map.of("submitted", 0, "total", room.players.size(), "distribution", Map.of()));
         PublicQuestion publicQuestion = new PublicQuestion(room.questionIndex, room.current().id(), room.current().prompt(),
                 room.current().options(), room.current().topic(), room.serverStart, room.endsAt, room.allowedMs, room.allowedMs,
                 room.current().imageUrl(), room.current().tableData());
@@ -154,7 +157,7 @@ public class RoomEngine {
         List<PlayerView> roster=standings(room); messaging.convertAndSend(topic(room, "roster"), roster);
         cache.put("room:" + room.code + ":roster", roster);
     }
-    private List<PlayerView> standings(Room room) { List<Player> sorted = new ArrayList<>(room.players.values()); sorted.sort(Comparator.comparingInt((Player p)->p.score).reversed().thenComparing(p->p.identity.name())); List<PlayerView> views=new ArrayList<>(); for(int i=0;i<sorted.size();i++) { Player p=sorted.get(i); int answered=p.responseTimes.size(); long avg=answered==0?0:p.responseTimes.stream().mapToLong(Long::longValue).sum()/answered; Map<String,TopicAnalytics> topics=new TreeMap<>(); p.topics.forEach((name,counter)->topics.put(name,counter.view())); views.add(new PlayerView(p.identity.playerId(),p.identity.name(),p.identity.college(),p.score,i+1,p.submissions.containsKey(room.questionIndex),answered==0?0:p.answersCorrect*100/answered,avg,topics)); } return views; }
+    private List<PlayerView> standings(Room room) { List<Player> sorted = new ArrayList<>(room.players.values()); sorted.sort(Comparator.comparingInt((Player p)->p.score).reversed().thenComparing(p->p.identity.name())); List<PlayerView> views=new ArrayList<>(); for(int i=0;i<sorted.size();i++) { Player p=sorted.get(i); int answered=p.responseTimes.size(); long avg=answered==0?0:p.responseTimes.stream().mapToLong(Long::longValue).sum()/answered; int accuracyDenominator=room.phase==Phase.FINAL_PODIUM?room.prompts.size():answered; Map<String,TopicAnalytics> topics=new TreeMap<>(); p.topics.forEach((name,counter)->topics.put(name,counter.view())); views.add(new PlayerView(p.identity.playerId(),p.identity.name(),p.identity.college(),p.score,i+1,p.submissions.containsKey(room.questionIndex),accuracyDenominator==0?0:p.answersCorrect*100/accuracyDenominator,avg,topics)); } return views; }
     private PlayerView view(Room room, Player player) { return standings(room).stream().filter(v->v.playerId().equals(player.identity.playerId())).findFirst().orElseThrow(); }
     private int rank(Room room, Player player) { return view(room, player).rank(); }
     private int countSubmitted(Room room) { return (int)room.players.values().stream().filter(p->p.submissions.containsKey(room.questionIndex)).count(); }
