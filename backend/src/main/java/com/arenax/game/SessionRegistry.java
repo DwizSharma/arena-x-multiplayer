@@ -17,6 +17,7 @@ public class SessionRegistry {
         tokens.put(token, identity); return identity;
     }
     public Identity validate(String playerId, String token) {
+        if (playerId == null || token == null) return null;
         Identity identity = tokens.get(token);
         return identity != null && identity.playerId().equals(playerId) ? identity : null;
     }
